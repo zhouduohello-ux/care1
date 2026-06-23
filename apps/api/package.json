@@ -1,0 +1,42 @@
+{
+  "name": "@carememory/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CareMemory Fastify backend API",
+  "scripts": {
+    "dev": "dotenv -e ../../.env -- tsx watch src/index.ts",
+    "start": "dotenv -e ../../.env -- tsx src/index.ts",
+    "build": "tsup src/index.ts --format cjs,esm --dts --clean",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts"
+  },
+  "dependencies": {
+    "@carememory/brief-templates": "workspace:*",
+    "@carememory/db": "workspace:*",
+    "@carememory/disease-card": "workspace:*",
+    "@carememory/engine": "workspace:*",
+    "@carememory/im-core": "workspace:*",
+    "@carememory/im-whatsapp": "workspace:*",
+    "@fastify/helmet": "^12.0.0",
+    "@fastify/rate-limit": "10.0.0",
+    "@fastify/static": "^8.0.0",
+    "@sentry/node": "^10.58.0",
+    "bullmq": "^5.0.0",
+    "fastify": "^5.0.0",
+    "fastify-plugin": "^5.0.0",
+    "ioredis": "^5.4.0",
+    "playwright": "^1.61.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.0",
+    "@types/node": "^22.0.0",
+    "@vitest/coverage-v8": "^4.1.9",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.9"
+  }
+}

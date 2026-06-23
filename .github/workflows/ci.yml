@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: check
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Start local infrastructure
+        run: pnpm infra:up
+
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql://carememory:carememory@localhost:5435/carememory?schema=public
+        run: pnpm --filter @carememory/db exec prisma migrate deploy
+
+      - name: Start API and run E2E scenarios
+        env:
+          NODE_ENV: development
+          PORT: 3055
+          DATABASE_URL: postgresql://carememory:carememory@localhost:5435/carememory?schema=public
+          REDIS_URL: redis://localhost:6381
+          APP_BASE_URL: http://localhost:3055
+          WEB_BASE_URL: http://localhost:3051
+          API_BASE_URL: http://localhost:3055
+          ENCRYPTION_KEY: ci-32-byte-encryption-key!!
+          JWT_SECRET: ci-jwt-secret
+          ENABLE_TEST_TOOL: "true"
+        run: |
+          node apps/api/dist/index.js &
+          API_PID=$!
+          for i in {1..30}; do
+            if curl -s http://localhost:3055/health > /dev/null; then
+              echo "API ready"
+              break
+            fi
+            sleep 1
+          done
+          pnpm test:e2e:staging
+          kill -9 $API_PID 2>/dev/null || true
+
+      - name: Stop local infrastructure
+        if: always()
+        run: pnpm infra:down

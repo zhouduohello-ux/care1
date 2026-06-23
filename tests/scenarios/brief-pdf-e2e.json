@@ -1,0 +1,53 @@
+{
+  "id": "brief_pdf_e2e",
+  "name": "Brief generation and PDF export",
+  "description": "Completes a check-in, generates a Brief, verifies the web view contains the required disclaimer and patient info, and confirms the PDF endpoint returns a PDF.",
+  "user": {
+    "phoneNumber": "test_brief_pdf"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "generate_brief" },
+    { "action": "fetch_brief" },
+    { "action": "fetch_pdf" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 7,
+      "type": "brief",
+      "op": "contains",
+      "value": "patient-reported information",
+      "caseInsensitive": true,
+      "description": "Brief HTML contains disclaimer"
+    },
+    {
+      "afterStep": 7,
+      "type": "brief",
+      "op": "contains",
+      "value": "asthma",
+      "caseInsensitive": true,
+      "description": "Brief HTML contains disease name"
+    },
+    {
+      "afterStep": 9,
+      "type": "pdf",
+      "path": "contentType",
+      "op": "contains",
+      "value": "application/pdf",
+      "description": "PDF endpoint returns application/pdf content type"
+    },
+    {
+      "afterStep": 9,
+      "type": "pdf",
+      "path": "size",
+      "op": "matches",
+      "value": "^[1-9]",
+      "description": "PDF body is non-empty"
+    }
+  ]
+}

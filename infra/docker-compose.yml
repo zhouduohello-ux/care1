@@ -1,0 +1,36 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: carememory-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: carememory
+      POSTGRES_PASSWORD: carememory
+      POSTGRES_DB: carememory
+    ports:
+      - "5435:5432"
+    volumes:
+      - carememory-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carememory -d carememory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: carememory-redis
+    restart: unless-stopped
+    ports:
+      - "6381:6379"
+    volumes:
+      - carememory-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  carememory-postgres-data:
+  carememory-redis-data:

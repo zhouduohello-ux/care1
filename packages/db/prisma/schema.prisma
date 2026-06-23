@@ -1,0 +1,235 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id             String        @id @default(cuid())
+  phoneNumber    String        @unique
+  waId           String?       @unique
+  locale         String        @default("en-GB")
+  timezone       String        @default("Europe/London")
+  nickname       String?
+  age            Int?
+  medications    Json?         // { baseline: [{ name, type, schedule }] }
+  nextVisitAt    DateTime?
+  lastInboundAt  DateTime?
+  sessionWindowExpiresAt DateTime?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+  consentGiven   Boolean       @default(false)
+  consentAt      DateTime?
+  consentVersion String        @default("v1")
+  deletedAt      DateTime?
+
+  cycles         Cycle[]
+  diseaseCards   DiseaseCard[]
+  events         Event[]
+  observations   Observation[]
+  narrativeSummaries NarrativeSummary[]
+
+  @@index([phoneNumber])
+  @@map("users")
+}
+
+enum CycleType {
+  TRIAL_7_DAY
+  PLAN_4_WEEK
+}
+
+enum CycleStatus {
+  ONBOARDING
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+model Cycle {
+  id            String      @id @default(cuid())
+  userId        String
+  user          User        @relation(fields: [userId], references: [id])
+  disease       String      @default("asthma")
+  type          CycleType   @default(TRIAL_7_DAY)
+  status        CycleStatus @default(ONBOARDING)
+  startedAt     DateTime    @default(now())
+  endedAt       DateTime?
+  nextCheckinAt DateTime?
+
+  checkIns      CheckIn[]
+  brief         Brief?
+  observations  Observation[]
+  narrativeSummaries NarrativeSummary[]
+  events        Event[]
+
+  @@index([userId])
+  @@index([status, nextCheckinAt])
+  @@map("cycles")
+}
+
+enum CheckInStatus {
+  SCHEDULED
+  SENT
+  COMPLETED
+  MISSED
+  EXCEPTION
+}
+
+model CheckIn {
+  id                    String        @id @default(cuid())
+  cycleId               String
+  cycle                 Cycle         @relation(fields: [cycleId], references: [id])
+  scheduledAt           DateTime
+  sentAt                DateTime?
+  completedAt           DateTime?
+  status                CheckInStatus @default(SCHEDULED)
+  sessionObjective      String?
+  questionsAsked        Int           @default(0)
+  budgetRemaining       Int           @default(3)
+  inExceptionMode       Boolean       @default(false)
+  exceptionQuestionsAsked Int         @default(0)
+  reminderSentAt        DateTime?
+
+  events           Event[]
+
+  @@index([cycleId])
+  @@index([status, scheduledAt])
+  @@map("check_ins")
+}
+
+enum EventType {
+  inbound_message
+  outbound_message
+  observation_extracted
+  state_updated
+  llm_call
+  safety_check
+  checkin_scheduled
+  checkin_sent
+  checkin_completed
+  user_action
+}
+
+model Event {
+  id                String    @id @default(cuid())
+  userId            String
+  user              User      @relation(fields: [userId], references: [id])
+  cycleId           String?
+  cycle             Cycle?    @relation(fields: [cycleId], references: [id])
+  checkInId         String?
+  checkIn           CheckIn?  @relation(fields: [checkInId], references: [id])
+  timestamp         DateTime  @default(now())
+  type              EventType
+  payload           Json
+  platformMessageId String?
+  traceId           String?
+  idempotencyKey    String?   @unique
+  llmModel          String?
+  llmInput          Json?
+  llmOutput         Json?
+  tokenUsage        Json?
+
+  @@index([userId, timestamp])
+  @@index([cycleId, timestamp])
+  @@index([type, timestamp])
+  @@index([platformMessageId])
+  @@map("events")
+}
+
+enum ObservationCategory {
+  symptom
+  medication
+  trigger
+  function
+  adverse_event
+  subjective
+  question
+  system_intent
+  profile
+}
+
+model Observation {
+  id              String                @id @default(cuid())
+  userId          String
+  user            User                  @relation(fields: [userId], references: [id])
+  cycleId         String
+  cycle           Cycle                 @relation(fields: [cycleId], references: [id])
+  eventId         String
+  timestamp       DateTime              @default(now())
+  category        ObservationCategory
+  concept         String
+  value           Json
+  attributes      Json?
+  confidence      Float                 @default(1.0)
+  extractedBy     String                @default("rule")
+  supersededById  String?
+  superseded      Boolean               @default(false)
+
+  @@index([userId, cycleId])
+  @@index([category, concept])
+  @@index([timestamp])
+  @@index([supersededById])
+  @@map("observations")
+}
+
+enum NarrativeScope {
+  session
+  cycle
+  longitudinal
+}
+
+model NarrativeSummary {
+  id                  String         @id @default(cuid())
+  userId              String
+  user                User           @relation(fields: [userId], references: [id])
+  cycleId             String?
+  cycle               Cycle?         @relation(fields: [cycleId], references: [id])
+  scope               NarrativeScope
+  generatedAt         DateTime       @default(now())
+  content             String
+  keyObservationIds   String[]
+  model               String?
+
+  @@index([userId, cycleId])
+  @@index([scope, generatedAt])
+  @@map("narrative_summaries")
+}
+
+model DiseaseCard {
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  cycleId       String?
+  disease       String
+  version       Int      @default(1)
+  generatedAt   DateTime @default(now())
+  modules       Json
+  rawSummary    String
+  model         String?
+  accessToken   String?  @unique
+  expiresAt     DateTime?
+
+  @@index([userId])
+  @@index([cycleId])
+  @@index([accessToken])
+  @@map("disease_cards")
+}
+
+model Brief {
+  id              String   @id @default(cuid())
+  cycleId         String   @unique
+  cycle           Cycle    @relation(fields: [cycleId], references: [id])
+  diseaseCardId   String?
+  webUrl          String
+  pdfUrl          String?
+  accessToken     String   @unique
+  expiresAt       DateTime
+  generatedAt     DateTime @default(now())
+
+  @@index([accessToken])
+  @@map("briefs")
+}

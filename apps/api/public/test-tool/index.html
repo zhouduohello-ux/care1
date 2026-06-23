@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareMemory Local Test Tool</title>
+  <style>
+    :root { --bg: #f3f4f6; --panel: #fff; --accent: #0ea5e9; --danger: #ef4444; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, sans-serif; background: var(--bg); }
+    header { background: var(--accent); color: #fff; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
+    header h1 { margin: 0; font-size: 1.1rem; }
+    .badge { background: #b91c1c; color: #fff; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+    main { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; height: calc(100vh - 64px); }
+    .panel { background: var(--panel); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; }
+    .panel h2 { margin: 0; padding: 0.75rem 1rem; font-size: 0.9rem; border-bottom: 1px solid #e5e7eb; }
+    #chat { flex: 1; overflow-y: auto; padding: 1rem; }
+    .msg { margin: 0.5rem 0; padding: 0.6rem 0.8rem; border-radius: 12px; max-width: 80%; word-break: break-word; }
+    .msg.user { background: #dbeafe; margin-left: auto; }
+    .msg.system { background: #f3f4f6; }
+    .msg.safety { background: #fee2e2; }
+    #controls { padding: 1rem; border-top: 1px solid #e5e7eb; }
+    .quick { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-bottom: 0.5rem; }
+    .quick button { border: 1px solid #d1d5db; background: #fff; border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.8rem; }
+    .quick button:hover { background: #f9fafb; }
+    .input-row { display: flex; gap: 0.5rem; }
+    input[type="text"], select { padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; }
+    input[type="text"] { flex: 1; }
+    button.primary { background: var(--accent); color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+    button.secondary { background: #fff; color: #374151; border: 1px solid #d1d5db; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
+    #inspector { flex: 1; overflow-y: auto; padding: 1rem; font-size: 0.85rem; }
+    .section { margin-bottom: 1rem; }
+    .section h3 { margin: 0 0 0.25rem; font-size: 0.8rem; color: #6b7280; text-transform: uppercase; }
+    pre { background: #f9fafb; padding: 0.5rem; border-radius: 4px; overflow-x: auto; }
+    .time-bar { padding: 0.75rem 1rem; border-top: 1px solid #e5e7eb; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .scenario-bar { padding: 0.75rem 1rem; border-top: 1px solid #e5e7eb; display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+    .risk-none { color: #16a34a; }
+    .risk-low { color: #ca8a04; }
+    .risk-medium { color: #ea580c; }
+    .risk-high { color: #dc2626; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>CareMemory Local Test Tool</h1>
+    <span class="badge">LOCAL DEV ONLY</span>
+  </header>
+  <main>
+    <div class="panel">
+      <h2>Chat Simulation</h2>
+      <div id="chat"></div>
+      <div id="controls">
+        <div class="quick">
+          <button onclick="send('START ASTHMA')">START ASTHMA</button>
+          <button onclick="send('AGREE')">AGREE</button>
+          <button onclick="send('Sarah')">Sarah</button>
+          <button onclick="send('SKIP')">SKIP</button>
+          <button onclick="sendButton('night_none')">None</button>
+          <button onclick="sendButton('night_mild')">Mild</button>
+          <button onclick="sendButton('reliever_0')">0 reliever</button>
+          <button onclick="sendButton('reliever_3_plus')">3+ reliever</button>
+          <button onclick="sendButton('activity_no')">No limit</button>
+          <button onclick="sendButton('activity_yes')">Limited</button>
+        </div>
+        <div class="input-row">
+          <input id="message" type="text" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendInput()" />
+          <button class="primary" onclick="sendInput()">Send</button>
+        </div>
+      </div>
+      <div class="time-bar">
+        <span id="now"></span>
+        <button onclick="advance('next_checkin')">Next Check-in</button>
+        <button onclick="advance('next_day')">+1 day</button>
+        <button class="secondary" onclick="resetUser()">Reset</button>
+      </div>
+      <div class="scenario-bar">
+        <label for="persona">Persona:</label>
+        <select id="persona"></select>
+        <button class="primary" onclick="loadPersona()">Load</button>
+        <button class="secondary" onclick="exportSession()">Export</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>Engine Inspector</h2>
+      <div id="inspector">
+        <div class="section"><h3>User</h3><pre id="user">No user yet</pre></div>
+        <div class="section"><h3>Cycle</h3><pre id="cycle">No cycle yet</pre></div>
+        <div class="section"><h3>Disease Card</h3><pre id="diseaseCard">None</pre></div>
+        <div class="section"><h3>L1 Perception</h3><pre id="perception">None</pre></div>
+        <div class="section"><h3>L4 Planner</h3><pre id="planner">None</pre></div>
+        <div class="section"><h3>L6 Safety</h3><pre id="safety">None</pre></div>
+        <div class="section"><h3>Latest Outbound</h3><pre id="latest">None</pre></div>
+      </div>
+    </div>
+  </main>
+  <script>
+    const userId = localStorage.getItem('cm_test_user') || 'test_user_' + Math.random().toString(36).slice(2, 8);
+    localStorage.setItem('cm_test_user', userId);
+    let lastTrace = null;
+
+    function append(text, sender) {
+      const chat = document.getElementById('chat');
+      const div = document.createElement('div');
+      div.className = 'msg ' + sender;
+      div.textContent = text;
+      chat.appendChild(div);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    function renderTrace(trace) {
+      if (!trace) return;
+      lastTrace = trace;
+      document.getElementById('perception').textContent = JSON.stringify({
+        intent: trace.perception?.intent,
+        observations: trace.perception?.extractedObservations,
+        safetyFlags: trace.perception?.safetyFlags,
+      }, null, 2);
+      document.getElementById('planner').textContent = JSON.stringify({
+        reasoning: trace.planner?.reasoning,
+        objective: trace.planner?.sessionObjective,
+        nextAction: trace.planner?.nextAction,
+        safetyFlag: trace.planner?.safetyFlag,
+      }, null, 2);
+      const riskClass = 'risk-' + (trace.safety?.riskLevel || 'none');
+      document.getElementById('safety').innerHTML = `<span class="${riskClass}">riskLevel: ${trace.safety?.riskLevel || 'none'}</span>\napproved: ${trace.safety?.approved}\naddendums: ${JSON.stringify(trace.safety?.requiredAddendums, null, 2)}`;
+    }
+
+    async function send(text) {
+      append(text, 'user');
+      const res = await fetch('/dev/test-tool/api/simulate-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, text })
+      });
+      const data = await res.json();
+      for (const msg of data.outboundMessages) {
+        append(msg.content.text, msg.conversationContext.priority === 'urgent' ? 'safety' : 'system');
+      }
+      document.getElementById('latest').textContent = JSON.stringify(data.outboundMessages, null, 2);
+      renderTrace(data.trace);
+      await loadState();
+    }
+
+    async function sendButton(buttonId) {
+      append('[' + buttonId + ']', 'user');
+      const res = await fetch('/dev/test-tool/api/simulate-message', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, buttonId })
+      });
+      const data = await res.json();
+      for (const msg of data.outboundMessages) {
+        append(msg.content.text, msg.conversationContext.priority === 'urgent' ? 'safety' : 'system');
+      }
+      document.getElementById('latest').textContent = JSON.stringify(data.outboundMessages, null, 2);
+      renderTrace(data.trace);
+      await loadState();
+    }
+
+    async function sendInput() {
+      const input = document.getElementById('message');
+      if (!input.value.trim()) return;
+      await send(input.value);
+      input.value = '';
+    }
+
+    async function advance(to) {
+      const res = await fetch('/dev/test-tool/api/advance-time', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, to })
+      });
+      const data = await res.json();
+      document.getElementById('now').textContent = data.newTime;
+      for (const msg of data.outboundMessages) {
+        append(msg.content.text, 'system');
+      }
+      await loadState();
+    }
+
+    async function resetUser() {
+      await fetch('/dev/test-tool/api/reset-user', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId })
+      });
+      document.getElementById('chat').innerHTML = '';
+      document.getElementById('user').textContent = 'Reset';
+      document.getElementById('cycle').textContent = 'Reset';
+      document.getElementById('diseaseCard').textContent = 'None';
+      document.getElementById('perception').textContent = 'None';
+      document.getElementById('planner').textContent = 'None';
+      document.getElementById('safety').textContent = 'None';
+      await loadState();
+    }
+
+    async function loadPersonas() {
+      const res = await fetch('/dev/test-tool/api/personas');
+      const data = await res.json();
+      const select = document.getElementById('persona');
+      select.innerHTML = '';
+      for (const p of data.personas) {
+        const option = document.createElement('option');
+        option.value = p.id;
+        option.textContent = p.name;
+        select.appendChild(option);
+      }
+    }
+
+    async function loadPersona() {
+      const select = document.getElementById('persona');
+      await fetch('/dev/test-tool/api/load-persona', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, personaId: select.value })
+      });
+      document.getElementById('chat').innerHTML = '';
+      append(`Loaded persona: ${select.options[select.selectedIndex].text}`, 'system');
+      await loadState();
+    }
+
+    async function exportSession() {
+      const res = await fetch('/dev/test-tool/api/export-session?userId=' + encodeURIComponent(userId));
+      if (!res.ok) return;
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `session_${userId}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    async function loadState() {
+      const res = await fetch('/dev/test-tool/api/session-state?userId=' + encodeURIComponent(userId));
+      if (!res.ok) return;
+      const data = await res.json();
+      document.getElementById('user').textContent = JSON.stringify({ id: data.user?.id, phoneNumber: data.user?.phoneNumber, nickname: data.user?.nickname, consentGiven: data.user?.consentGiven }, null, 2);
+      document.getElementById('cycle').textContent = JSON.stringify({ id: data.cycle?.id, status: data.cycle?.status, disease: data.cycle?.disease, nextCheckinAt: data.cycle?.nextCheckinAt }, null, 2);
+      document.getElementById('diseaseCard').textContent = data.diseaseCard ? JSON.stringify({ id: data.diseaseCard.id, version: data.diseaseCard.version, generatedAt: data.diseaseCard.generatedAt }, null, 2) : 'None';
+    }
+
+    document.getElementById('now').textContent = new Date().toISOString();
+    loadPersonas();
+    loadState();
+  </script>
+</body>
+</html>

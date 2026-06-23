@@ -1,0 +1,41 @@
+{
+  "name": "carememory",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CareMemory — AI-native复诊前健康记忆引擎",
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "test": "turbo run test",
+    "lint": "turbo run lint",
+    "db:generate": "pnpm --filter @carememory/db generate",
+    "db:migrate": "pnpm --filter @carememory/db migrate",
+    "db:deploy": "pnpm --filter @carememory/db run deploy",
+    "db:studio": "pnpm --filter @carememory/db studio",
+    "db:seed": "pnpm --filter @carememory/db seed",
+    "infra:up": "docker compose -f infra/docker-compose.yml up -d",
+    "infra:down": "docker compose -f infra/docker-compose.yml down",
+    "infra:logs": "docker compose -f infra/docker-compose.yml logs -f",
+    "test:e2e": "tsx tests/scenarios/run-scenario.ts",
+    "test:e2e:controlled": "tsx tests/scenarios/run-scenario.ts tests/scenarios/controlled-asthma-short.json",
+    "test:e2e:worsening": "tsx tests/scenarios/run-scenario.ts tests/scenarios/worsening-override.json",
+    "test:e2e:exception": "tsx tests/scenarios/run-scenario.ts tests/scenarios/exception-mode-short.json",
+    "test:e2e:brief": "tsx tests/scenarios/run-scenario.ts tests/scenarios/brief-pdf-e2e.json",
+    "test:e2e:cross-cycle": "tsx tests/scenarios/run-scenario.ts tests/scenarios/cross-cycle-late-reply.json",
+    "test:e2e:7day": "tsx tests/scenarios/run-scenario.ts tests/scenarios/full-7-day-trial.json",
+    "test:e2e:staging": "tsx tests/scenarios/run-all.ts",
+    "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
+    "typecheck": "turbo run typecheck"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "dotenv-cli": "^11.0.0",
+    "tsx": "^4.19.0",
+    "turbo": "^2.3.0",
+    "typescript": "^5.7.0"
+  },
+  "packageManager": "pnpm@9.0.0",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

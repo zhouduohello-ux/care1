@@ -1,0 +1,94 @@
+# Render Blueprint for CareMemory.
+# Usage:
+#   1. Push this file to your repository.
+#   2. In the Render dashboard create a new "Blueprint" and point it at this repo.
+#   3. After services are created, set the required secrets in each service's
+#      Environment tab (Render does not expose secrets in blueprints):
+#        - ENCRYPTION_KEY
+#        - JWT_SECRET
+#        - ADMIN_API_KEY
+#        - WHATSAPP_PHONE_NUMBER_ID
+#        - WHATSAPP_BUSINESS_ACCOUNT_ID
+#        - WHATSAPP_ACCESS_TOKEN
+#        - WHATSAPP_WEBHOOK_VERIFY_TOKEN
+#        - WHATSAPP_APP_SECRET
+#        - OPENAI_API_KEY
+#        - ANTHROPIC_API_KEY
+#        - DOCTOR_FEEDBACK_URL (optional)
+#        - SENTRY_DSN (optional)
+#        - LOG_LEVEL (optional, default: info)
+#
+#   Staging-only E2E configuration:
+#   - For the staging API service, set ENABLE_TEST_TOOL=true and generate a
+#     strong TEST_TOOL_API_KEY. The E2E runner will send it as the
+#     X-Test-Tool-Api-Key header. NEVER set ENABLE_TEST_TOOL=true on the
+#     production API service.
+#   - Set the GitHub secret STAGING_API_BASE_URL (e.g.
+#     https://carememory-api-staging.onrender.com) and TEST_TOOL_API_KEY so the
+#     deploy workflow can run smoke tests after deployment.
+#
+#   4. Run the Prisma migration once from the "carememory-api" service shell:
+#        cd packages/db && npx prisma migrate deploy
+
+services:
+  - type: web
+    name: carememory-api
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3000"
+      - key: ENABLE_TEST_TOOL
+        value: "false"
+      - key: TEST_TOOL_API_KEY
+        value: ""
+      - key: DATABASE_URL
+        fromDatabase:
+          name: carememory-db
+          property: connectionString
+      - key: REDIS_URL
+        fromService:
+          type: redis
+          name: carememory-redis
+          property: connectionString
+      - key: APP_BASE_URL
+        value: https://carememory-api.onrender.com
+      - key: WEB_BASE_URL
+        value: https://carememory-web.onrender.com
+      - key: API_BASE_URL
+        value: https://carememory-api.onrender.com
+      - key: DEFAULT_PLANNER_MODEL
+        value: gpt-4o-mini
+      - key: DEFAULT_DIALOGUE_MODEL
+        value: gpt-4o-mini
+      - key: DEFAULT_PERCEPTION_MODEL
+        value: gpt-4o-mini
+      - key: DEFAULT_SAFETY_MODEL
+        value: gpt-4o-mini
+      - key: OPENAI_BASE_URL
+        sync: false
+    healthCheckPath: /health
+
+  - type: web
+    name: carememory-web
+    runtime: node
+    buildCommand: pnpm install --frozen-lockfile && pnpm build
+    startCommand: pnpm --filter @carememory/web start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_BASE_URL
+        value: https://carememory-api.onrender.com
+
+databases:
+  - name: carememory-db
+    databaseName: carememory
+    user: carememory
+    plan: starter
+
+redis:
+  - name: carememory-redis
+    plan: starter
+    maxmemoryPolicy: noeviction

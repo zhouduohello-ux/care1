@@ -1,0 +1,32 @@
+{
+  "id": "worsening_with_override",
+  "name": "Worsening symptoms recorded and check-in ends",
+  "description": "Reports night symptoms, high reliever use and post-exercise wheezing. The current rule-based planner does not yet implement exception-mode override, so the scenario verifies the check-in completes and a Disease Card is generated.",
+  "user": {
+    "phoneNumber": "test_worsening_override"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "worsening_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_woke_up" },
+    { "action": "reply", "buttonId": "reliever_3_plus" },
+    { "action": "send", "text": "I wheezed badly after running today" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 6,
+      "type": "planner",
+      "path": "nextAction.type",
+      "op": "eq",
+      "value": "end_session",
+      "description": "Check-in ends after budget is used"
+    },
+    {
+      "afterStep": 6,
+      "type": "diseaseCard",
+      "op": "exists",
+      "description": "A Disease Card is generated after the check-in"
+    }
+  ]
+}

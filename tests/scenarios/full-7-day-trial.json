@@ -1,0 +1,66 @@
+{
+  "id": "full_7_day_trial",
+  "name": "Full 7-day trial journey",
+  "description": "Simulates the complete MVP 7-day trial: onboarding is skipped via persona, four check-ins are completed over ~7 days, and the final Disease Card reflects aggregated observations.",
+  "user": {
+    "phoneNumber": "test_7_day_trial"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "999",
+      "caseInsensitive": true,
+      "description": "First check-in outbound includes emergency disclaimer"
+    },
+    {
+      "afterStep": 6,
+      "type": "planner",
+      "path": "nextAction.type",
+      "op": "eq",
+      "value": "end_session",
+      "description": "First check-in ends after budget is used"
+    },
+    {
+      "afterStep": 18,
+      "type": "diseaseCard",
+      "op": "exists",
+      "description": "A Disease Card exists after completing the trial"
+    },
+    {
+      "afterStep": 18,
+      "type": "observation",
+      "op": "exists",
+      "filter": { "concept": "nighttime_symptoms", "value": "none" },
+      "description": "Nighttime symptom observations are aggregated"
+    },
+    {
+      "afterStep": 18,
+      "type": "observation",
+      "op": "exists",
+      "filter": { "concept": "reliever_use", "value": 0 },
+      "description": "Reliever use observations are aggregated"
+    }
+  ]
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@carememory/db",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CareMemory Prisma schema and database client",
+  "main": "./generated/client/index.js",
+  "module": "./generated/client/index.js",
+  "types": "./generated/client/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./generated/client/index.d.ts",
+      "require": "./generated/client/index.js",
+      "import": "./generated/client/index.js"
+    },
+    "./client": {
+      "types": "./generated/client/index.d.ts",
+      "require": "./generated/client/index.js",
+      "import": "./generated/client/index.js"
+    }
+  },
+  "scripts": {
+    "generate": "dotenv -e ../../.env -- prisma generate",
+    "migrate": "dotenv -e ../../.env -- prisma migrate dev --name init",
+    "deploy": "dotenv -e ../../.env -- prisma migrate deploy",
+    "studio": "dotenv -e ../../.env -- prisma studio",
+    "seed": "dotenv -e ../../.env -- tsx src/seed.ts",
+    "build": "prisma generate",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.0.0"
+  },
+  "devDependencies": {
+    "prisma": "^6.0.0",
+    "tsup": "^8.3.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}

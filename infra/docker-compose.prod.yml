@@ -1,0 +1,87 @@
+# Self-hosted production stack for CareMemory.
+# Set required secrets in a .env file before running:
+#   docker compose -f infra/docker-compose.prod.yml up -d
+#
+# Note: WhatsApp, LLM, object-storage and email credentials are optional for
+# a smoke-test deployment, but required for a real MVP.
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: carememory-postgres-prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: carememory
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-carememory}
+      POSTGRES_DB: carememory
+    volumes:
+      - carememory-postgres-prod-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U carememory -d carememory"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: carememory-redis-prod
+    restart: unless-stopped
+    volumes:
+      - carememory-redis-prod-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    command: ["sh", "-c", "cd packages/db && npx prisma migrate deploy"]
+    environment:
+      DATABASE_URL: postgresql://carememory:${POSTGRES_PASSWORD:-carememory}@postgres:5432/carememory?schema=public
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - migrate
+
+  api:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: carememory-api-prod
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3055}:3000"
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://carememory:${POSTGRES_PASSWORD:-carememory}@postgres:5432/carememory?schema=public
+      REDIS_URL: redis://redis:6379
+      APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3055}
+      WEB_BASE_URL: ${WEB_BASE_URL:-http://localhost:3051}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      JWT_SECRET: ${JWT_SECRET}
+      WHATSAPP_PHONE_NUMBER_ID: ${WHATSAPP_PHONE_NUMBER_ID}
+      WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN}
+      WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${WHATSAPP_WEBHOOK_VERIFY_TOKEN}
+      WHATSAPP_APP_SECRET: ${WHATSAPP_APP_SECRET}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      OPENAI_BASE_URL: ${OPENAI_BASE_URL}
+      DEFAULT_PLANNER_MODEL: ${DEFAULT_PLANNER_MODEL:-gpt-4o-mini}
+      DEFAULT_DIALOGUE_MODEL: ${DEFAULT_DIALOGUE_MODEL:-gpt-4o-mini}
+      DEFAULT_PERCEPTION_MODEL: ${DEFAULT_PERCEPTION_MODEL:-gpt-4o-mini}
+      DEFAULT_SAFETY_MODEL: ${DEFAULT_SAFETY_MODEL:-gpt-4o-mini}
+      ENABLE_TEST_TOOL: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  carememory-postgres-prod-data:
+  carememory-redis-prod-data:

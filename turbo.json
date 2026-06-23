@@ -1,0 +1,30 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["**/.env.*local", "**/.env"],
+  "globalEnv": [
+    "NODE_ENV",
+    "DATABASE_URL",
+    "REDIS_URL",
+    "OPENAI_API_KEY",
+    "APP_BASE_URL",
+    "WHATSAPP_PHONE_NUMBER_ID",
+    "WHATSAPP_ACCESS_TOKEN",
+    "WHATSAPP_WEBHOOK_VERIFY_TOKEN",
+    "WHATSAPP_APP_SECRET"
+  ],
+  "tasks": {
+    "build": {
+      "dependsOn": ["^build"],
+      "outputs": [".next/**", "dist/**", "!.next/cache/**"]
+    },
+    "dev": {
+      "cache": false,
+      "persistent": true
+    },
+    "test": {
+      "dependsOn": ["^build"]
+    },
+    "lint": {},
+    "typecheck": {}
+  }
+}
