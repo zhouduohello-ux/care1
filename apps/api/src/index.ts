@@ -101,8 +101,8 @@ async function main() {
   if (!process.env.WHATSAPP_ACCESS_TOKEN || !process.env.WHATSAPP_PHONE_NUMBER_ID) {
     app.log.warn("WhatsApp credentials are not configured; outbound messages will not be sent to Meta.");
   }
-  if (!process.env.OPENAI_API_KEY) {
-    app.log.warn("OPENAI_API_KEY is not set; perception and planner will use rule-based fallbacks.");
+  if (!process.env.LLM_API_KEY && !process.env.OPENAI_API_KEY) {
+    app.log.warn("No LLM API key configured (LLM_API_KEY or OPENAI_API_KEY); perception and planner will use rule-based fallbacks.");
   }
 
   // Start BullMQ-based background scheduler for check-ins and reminders

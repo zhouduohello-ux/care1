@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
+import { createHash } from "crypto";
 import { processInbound, handleCheckInTrigger, type EngineContext, deleteUserData, scheduleNextCheckInOffset } from "@carememory/engine";
 import type { InboundMessage, Platform } from "@carememory/im-core";
 import { createExportTokenFactory } from "../lib/export-token.js";
-import { createLlmClient, getLlmClient } from "../lib/llm-client.js";
+import { loadLLMConfig } from "@carememory/engine";
 import { listPersonas, loadPersona } from "../test-tool/persona-library.js";
 
 const SimulateMessageSchema = z.object({
@@ -26,6 +27,20 @@ const ReplaySessionSchema = z.object({
   userId: z.string(),
   sessionJson: z.record(z.unknown()),
 });
+
+const RegisterSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
+const LoginSchema = z.object({
+  username: z.string().min(1),
+  password: z.string().min(1),
+});
+
+function sha256(s: string): string {
+  return createHash("sha256").update(s).digest("hex");
+}
 
 export default async function testToolRoutes(fastify: FastifyInstance) {
   if (process.env.ENABLE_TEST_TOOL !== "true") {
@@ -59,8 +74,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
       now: fastify.clock.now(),
       createExportToken: createExportTokenFactory(fastify),
       webBaseUrl: process.env.API_BASE_URL ?? "http://localhost:3055",
-      llmClient: createLlmClient(),
-      llmClientFor: getLlmClient,
+      llmConfig: loadLLMConfig(),
     };
   }
 
@@ -126,7 +140,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: fastify.clock.now() }, cycle.id);
+        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: fastify.clock.now(), llmConfig: loadLLMConfig() }, cycle.id);
         outboundMessages.push(...msgs);
 
         // If the engine did not schedule a next check-in (e.g. the cycle has no user bucket yet),
@@ -263,6 +277,30 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
       await deleteUserData(fastify.prisma, user.id);
     }
     return reply.send({ reset: true });
+  });
+
+  fastify.post("/dev/test-tool/api/register", async (request: FastifyRequest<{ Body: { username: string; password: string } }>, reply) => {
+    const body = RegisterSchema.parse(request.body);
+    const existing = await fastify.prisma.user.findUnique({ where: { phoneNumber: body.username } });
+    if (existing) {
+      return reply.code(409).send({ error: "Username already taken" });
+    }
+    await fastify.prisma.user.create({
+      data: {
+        phoneNumber: body.username,
+        passwordHash: sha256(body.password),
+      },
+    });
+    return reply.send({ success: true, username: body.username });
+  });
+
+  fastify.post("/dev/test-tool/api/login", async (request: FastifyRequest<{ Body: { username: string; password: string } }>, reply) => {
+    const body = LoginSchema.parse(request.body);
+    const user = await fastify.prisma.user.findUnique({ where: { phoneNumber: body.username } });
+    if (!user || user.passwordHash !== sha256(body.password)) {
+      return reply.code(401).send({ error: "Invalid username or password" });
+    }
+    return reply.send({ success: true, username: body.username });
   });
 
   fastify.get("/dev/test-tool", async (_request, reply) => {

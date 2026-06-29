@@ -20,7 +20,7 @@ describe("LLM client", () => {
   });
 
   it("calls OpenAI chat completions endpoint", async () => {
-    const client = createOpenAIClient({ apiKey: "sk-test" });
+    const client = createOpenAIClient({ apiKey: "sk-test", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" });
     const response = await client.complete([{ role: "user", content: "Hi" }]);
     expect(response).toBe("Hello");
     expect(fetch).toHaveBeenCalledTimes(1);
@@ -37,7 +37,7 @@ describe("LLM client", () => {
         text: async () => "Rate limited",
       })
     );
-    const client = createOpenAIClient({ apiKey: "sk-test" });
+    const client = createOpenAIClient({ apiKey: "sk-test", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" });
     await expect(client.complete([{ role: "user", content: "Hi" }])).rejects.toThrow("Rate limited");
   });
 
@@ -137,7 +137,7 @@ describe("LLM client", () => {
       content: { type: "text", text: "fine", rawPayload: {} },
     };
 
-    const client = createOpenAIClient({ apiKey: "sk-test" });
+    const client = createOpenAIClient({ apiKey: "sk-test", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" });
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("Network error")));
 
     const result = await perceive(message, client);

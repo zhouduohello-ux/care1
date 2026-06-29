@@ -25,6 +25,7 @@ model User {
   consentGiven   Boolean       @default(false)
   consentAt      DateTime?
   consentVersion String        @default("v1")
+  passwordHash   String?
   deletedAt      DateTime?
 
   cycles         Cycle[]

@@ -1,7 +1,7 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import type { PrismaClient, ObservationCategory } from "@carememory/db";
 
-import type { LLMClient } from "./llm.js";
+import type { LLMClient, LLMConfig } from "./llm.js";
 import type { QuotaStore } from "./llm-quota.js";
 
 export type LlmModelType = "perception" | "planner" | "dialogue" | "safety";
@@ -12,8 +12,20 @@ export interface EngineContext {
   quotaStore?: QuotaStore;
   createExportToken?: (userId: string) => Promise<string>;
   webBaseUrl?: string;
-  llmClient?: LLMClient;
-  llmClientFor?: (model: LlmModelType) => LLMClient | undefined;
+  /**
+   * Unified LLM configuration. Set once at startup via `loadLLMConfig()`.
+   * The engine internally resolves the right `LLMClient` per layer with caching.
+   * When absent or `{ enabled: false }`, all layers fall back to rule-based logic.
+   */
+  llmConfig?: LLMConfig;
+}
+
+/** Minimal session context passed into L1 perception to aid intent disambiguation. */
+export interface PerceptionContext {
+  /** Whether there is an active check-in (SENT / SCHEDULED) expecting a reply. */
+  checkInActive: boolean;
+  /** The session objective of the current check-in, if any. */
+  sessionObjective?: string;
 }
 
 export interface Observation {
@@ -26,6 +38,9 @@ export interface Observation {
 }
 
 export interface PerceptionResult {
+  messageId: string;
+  timestamp: Date;
+  traceId: string;
   intent: {
     primary: string;
     confidence: number;

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>L1 感知层 — 功能完成度 Gap 分析</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #fff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --p0: #dc2626;
+      --p0-bg: #fee2e2;
+      --p1: #d97706;
+      --p1-bg: #fffbeb;
+      --p2: #2563eb;
+      --p2-bg: #eff6ff;
+      --p3: #6b7280;
+      --p3-bg: #f3f4f6;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      margin: 0;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: #fff;
+      padding: 2rem;
+      border-radius: 12px;
+      margin-bottom: 2rem;
+    }
+    header h1 { margin: 0 0 0.5rem; font-size: 1.8rem; }
+    header p { margin: 0; color: #94a3b8; }
+    h2 { margin-top: 2.5rem; font-size: 1.4rem; border-left: 4px solid #3b82f6; padding-left: 0.75rem; }
+    h3 { margin-top: 2rem; font-size: 1.15rem; color: #334155; }
+    .meta { background: var(--card); padding: 1rem 1.25rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin: 1rem 0; font-size: 0.92rem; }
+    th, td { border: 1px solid var(--border); padding: 0.65rem 0.85rem; text-align: left; vertical-align: top; }
+    th { background: #f1f5f9; font-weight: 600; white-space: nowrap; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .p0 { background: var(--p0-bg); color: var(--p0); }
+    .p1 { background: var(--p1-bg); color: var(--p1); }
+    .p2 { background: var(--p2-bg); color: var(--p2); }
+    .p3 { background: var(--p3-bg); color: var(--p3); }
+    .ok { background: #dcfce7; color: #16a34a; }
+    .section-desc {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin: -0.5rem 0 1rem;
+    }
+    .callout {
+      background: #fffbeb;
+      border-left: 4px solid #d97706;
+      padding: 1rem 1.25rem;
+      border-radius: 6px;
+      margin: 1.5rem 0;
+      font-size: 0.92rem;
+    }
+    .callout strong { color: #92400e; }
+    .summary-list { background: var(--card); padding: 1.25rem 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+    .summary-list ol { margin: 0; padding-left: 1.25rem; }
+    .summary-list li { margin: 0.6rem 0; }
+    .gap-count { font-size: 0.85rem; color: var(--muted); margin-left: 0.5rem; }
+    footer { margin-top: 3rem; text-align: center; color: var(--muted); font-size: 0.85rem; }
+    code { background: #f1f5f9; padding: 0.15rem 0.35rem; border-radius: 4px; font-size: 0.88em; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>L1 感知层 — 功能完成度 Gap 分析</h1>
+      <p>100% 完成度对照：func-spec §3.1 / decisions D1,D2,D4,D8 / tech-spec §6.2 / open-boundaries</p>
+    </header>
+
+    <div class="meta">
+      <strong>对照基准：</strong><code>docs/func-spec.md</code> §3.1、<code>docs/decisions.md</code> D1/D2/D4/D8、<code>docs/open-boundaries.md</code>、<code>docs/tech-spec.md</code> §6.2、<code>temp/status_20260626.html</code><br />
+      <strong>代码对照：</strong><code>packages/engine/src/perception.ts</code>、<code>packages/engine/src/types.ts</code><br />
+      <strong>分析日期：</strong>2026-06-29
+    </div>
+
+    <h2>A. 接口完整性缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §3.1 定义的 PerceptionResult 接口与输入规范</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已补全 messageId/timestamp/traceId</td>
+        <td><code>types.ts</code> 中 <code>PerceptionResult</code> 新增 <code>messageId: string</code>、<code>timestamp: Date</code>、<code>traceId: string</code> 三个字段。<code>perceive()</code> 从 <code>InboundMessage</code> 填充前两个，<code>traceId</code> 通过 <code>crypto.randomUUID()</code> 生成。</td>
+        <td>func-spec §3.1 接口定义<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已传入会话上下文</td>
+        <td><code>perceive()</code> 新增 <code>context?: PerceptionContext</code> 参数（{ checkInActive, sessionObjective }）。engine.ts 将 <code>activeCheckIn</code> 查询前移到 perception 调用之前，构建 context 传入。<code>perceiveWithLlm</code> 将 session objective 注入 system prompt，帮助 LLM 了解用户正在回答哪个问题。</td>
+        <td>func-spec §3.1 输入定义；D6 per-turn re-planning<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>B. RAG 集成缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §4.1 / §4.3、decisions D2 / D4</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td><strong>Medical KB 已接入感知层</strong></td>
+        <td><code>perceive()</code> 新增 <code>disease</code> 参数，通过 <code>loadDiseaseCorpus()</code> + <code>searchCorpus()</code> 按用户文本检索 Top-3 RAG 片段；<code>perceiveWithLlm()</code> 将检索结果注入 LLM system prompt 作为疾病知识参考。同时 rule-level regex 补充了 RAG safety-rules 中的触发词（chest tightness、blue lips、peak flow 等）。</td>
+        <td>func-spec §4.1 / §4.3；D2；D4<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>感知层 LLM prompt 已含 RAG 知识注入</td>
+        <td><code>perceiveWithLlm</code> 的 system prompt 现在动态注入 <code>searchCorpus</code> 返回的疾病知识片段。LLM 不再仅依赖自身预训练知识。<em>随 B1 一并完成。</em></td>
+        <td>func-spec §3.1「自由文本由 LLM + RAG 提取 observation」<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>C. LLM 感知质量缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §3.1 / §5.2、decisions D1</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>System prompt 已疾病无关化</td>
+        <td><code>perceiveWithLlm</code> 的 system prompt 改为 <code>"Current disease context: ${disease}"</code>，由 <code>perceive()</code> 的 <code>disease</code> 参数传入。不再硬编码哮喘。</td>
+        <td>D1「不允许把哮喘字段硬编码到引擎核心逻辑」<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 question category</td>
+        <td>LLM system prompt 的 observation category 枚举已加入 <code>"question"</code>。用户主动提问时 LLM 可提取 question 类 observation。</td>
+        <td>func-spec §5.2 category 枚举<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 attributes 提取指引</td>
+        <td>LLM system prompt 的 observation schema 新增 <code>attributes: { severity?, frequency?, duration? }</code>，Guidelines 中明确要求提取这些维度。</td>
+        <td>func-spec §5.2：attributes 字段 + 示例 <code>frequency: "2_nights"</code><br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加异常检测类型指引</td>
+        <td>LLM system prompt 的 anomalies schema 改为具体类型枚举 (management_rule_violation 等 5 种)，Guidelines 说明各类型的含义和使用场景。</td>
+        <td>func-spec §13.1：5 类异常检测来源<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>D. 意图识别缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §3.1、decisions D8</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td><strong>已支持用户主动咨询意图</strong></td>
+        <td>Rule 层：<code>context.checkInActive === false</code> 时自由文本 intent 默认设为 <code>"question"</code>（confidence 0.8），LLM 可通过 prompt 覆盖。LLM 层：system prompt 新增 <code>"question"</code> intent 选项及使用指引。engine.ts：<code>"question"</code> 加入 late-reply 排除列表，自然 fall-through 触发完整 Planner 流程且不消耗 check-in budget。</td>
+        <td>D8 用户主动咨询；func-spec §6.4<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 adverse_event 意图指引</td>
+        <td>LLM system prompt Guidelines 新增：Use <code>"adverse_event"</code> as primary intent when the patient reports a suspected drug reaction or side effect。</td>
+        <td>func-spec §3.1 intent 枚举<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>E. 异常检测缺口 <span class="gap-count">(1 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §13.1、decisions D2</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 rule-level 管理规则不一致检测</td>
+        <td>LLM 路径：system prompt anomalies 包含 management_rule_violation 类型 + RAG care-strategy 注入。Rule 路径：新增 heuristic 检测高频率 reliever 使用 + 缺失 controller 提及的组合信号。</td>
+        <td>func-spec §13.1<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加复合信号冲突检测</td>
+        <td>LLM 路径：system prompt anomalies 包含 compound_signal_conflict 类型。Rule 路径：新增 4 维度复合信号检测 (worsening + nighttime + reliever + activity) ≥3 命中触发。同时新增 severity_escalation 检测。</td>
+        <td>func-spec §13.1<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge p3">P3</span></td>
+        <td>缺少跨消息异常检测</td>
+        <td>当前每次 <code>perceive()</code> 调用是独立的（无状态）。无法检测「用户回答与历史模式冲突」或症状逐次恶化趋势。需要多轮上下文，架构改造较大。</td>
+        <td>func-spec §13.1</td>
+      </tr>
+    </table>
+
+    <h2>F. 结构化提取缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §5.2 / §3.1</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 RAG corpus 关键词规则提取</td>
+        <td>新增 <code>extractWithRules()</code> 函数，LLM 不可用时使用 RAG corpus 中医学关键词做 symptom/medication 概念匹配并提取数字 value。仅在无可匹配关键词时才回退到 free_text_response。</td>
+        <td>func-spec §3.1「自由文本由 LLM + RAG 提取 observation」<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 corpus 关键词提取</td>
+        <td>新增 <code>extractMedicalKeywords()</code> 从 RAG medical-overview 和 safety-rules 提取症状/用药关键词，<code>extractWithRules()</code> 进行交叉匹配。随 F1 一并完成。</td>
+        <td>D2「用医学语料库 RAG + 大模型做意图分析和信号识别」<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>G. 疾病无关架构缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 decisions D1</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已导出为可覆盖常量</td>
+        <td>按钮映射从内部变量改为导出的 <code>DEFAULT_BUTTON_MAP</code> 常量。未来多病种支持时，调用方可传入替代映射，无需修改 perception 代码。</td>
+        <td>D1「不允许把哮喘字段硬编码到引擎核心逻辑」<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td><code>START</code> 命令已泛化</td>
+        <td><code>perceive()</code> 检测逻辑改为 <code>upperText.startsWith("START ") && upperText.includes(disease.toUpperCase())</code>，observation concept 动态为 <code>start_${disease}</code>。移除了 <code>SYSTEM_COMMANDS</code> 中的 <code>"START ASTHMA"</code>。</td>
+        <td>D1；open-boundaries B1「关键词决定疾病」<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>H. 安全检测增强缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 func-spec §13.1 / §14.1</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 改善</span></td>
+        <td>Severe symptom regex 已增强</td>
+        <td>从 RAG safety-rules 补充了触发词：<code>shortness of breath</code>、<code>chest tightness</code>、<code>blue lips</code>、<code>peak flow</code>、<code>no relief</code>。原有 panic words（999、emergency、ambulance）保留。LLM 路径也通过 RAG 注入获得完整安全规则指引。<em>随 B1 一并完成。</em></td>
+        <td>func-spec §14.1<br><em>2026-06-29 完成</em></td>
+      </tr>
+      <tr>
+        <td><span class="badge ok">✅ 改善</span></td>
+        <td>Adverse event regex 已增强</td>
+        <td>补充了常见药物不良反应关键词：<code>vomit</code>、<code>dizziness</code>、<code>palpitations</code>。LLM 路径也通过 RAG safety-rules 获得完整安全规则。<em>随 B1 一并完成。</em></td>
+        <td>func-spec §13.1<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>I. 可观测性缺口 <span class="gap-count">(0 剩余)</span></h2>
+    <p class="section-desc">对照 tech-spec §6.3</p>
+    <table>
+      <tr><th>#</th><th>Gap</th><th>描述</th><th>依据</th></tr>
+      <tr>
+        <td><span class="badge ok">✅ 完成</span></td>
+        <td>已添加 traceId</td>
+        <td><code>PerceptionResult</code> 新增 <code>traceId: string</code> 字段，<code>perceive()</code> 中通过 <code>crypto.randomUUID()</code> 生成。随 A1 一并完成。</td>
+        <td>tech-spec §6.3；AGENTS.md「traceId 字段存在但未在 engine 中赋值」<br><em>2026-06-29 完成</em></td>
+      </tr>
+    </table>
+
+    <h2>汇总优先级</h2>
+    <div class="summary-list">
+      <ol>
+        <li><span class="badge ok">✅ 完成</span> <strong>B1 — RAG Medical KB 已接入</strong>：<code>perceive()</code> 通过 <code>searchCorpus</code> 检索 Top-3 RAG 片段，注入 LLM system prompt。同时增强 rule-level regex。连带完成 B2/H1/H2。</li>
+        <li><span class="badge ok">✅ 完成</span> <strong>D1 — 已支持用户主动咨询意图</strong>：Rule 层通过 <code>context.checkInActive</code> 检测 + LLM prompt 新增 <code>"question"</code> intent。engine 自然 fall-through 触发 Planner，不消耗 budget。</li>
+        <li><span class="badge ok">✅ 完成</span> <strong>A2 — 已传入会话上下文</strong>：新增 <code>PerceptionContext { checkInActive, sessionObjective }</code>，engine.ts 将 activeCheckIn 查询前移，LLM prompt 注入 session objective。</li>
+        <li><span class="badge ok">✅ 完成</span> <strong>C1 — System prompt 已疾病无关化</strong>：system prompt 改为 <code>"Current disease context: ${disease}"</code>，由 disease 参数动态传入。</li>
+        <li><span class="badge ok">✅ 完成</span> <strong>G2 — START ASTHMA 已泛化</strong>：检测逻辑改为 <code>START &lt;disease&gt;</code> 通用匹配。</li>
+        <li><span class="badge ok">✅ 完成</span> <strong>E1/E2 — 已添加规则不一致/复合信号检测</strong>：LLM 路径已添加 management_rule_violation / compound_signal_conflict 类型；Rule 路径新增 heuristic 检测。</li>
+      </ol>
+    </div>
+
+    <div class="callout">
+      <strong>全部完成 (2026-06-29)：</strong>L1 感知层 19 个 gap 全部解决。P0：B1(✨) + D1(✨)。P1：A2 + C1 + G2 + E1/E2。P2/P3：C2/C3/C4/D2/F1/F2/G1/A1/I1。唯一保留 P3 项 E3（跨消息异常检测）需要多轮上下文支持，留待后续架构迭代。
+    </div>
+
+    <footer>
+      Generated by Kimi Code · CareMemory L1 Perception Gap Analysis · 2026-06-29 · 最后更新 2026-06-29 (全 gap 解决)
+    </footer>
+  </div>
+</body>
+</html>

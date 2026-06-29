@@ -6,7 +6,7 @@ import { DefaultPlatformRegistry } from "@carememory/im-core";
 import { createWhatsAppAdapter } from "@carememory/im-whatsapp";
 import { handleInbound } from "@carememory/engine";
 import { createExportTokenFactory } from "../lib/export-token.js";
-import { createLlmClient, getLlmClient } from "../lib/llm-client.js";
+import { loadLLMConfig } from "@carememory/engine";
 import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
 
 export default async function webhookRoutes(fastify: FastifyInstance) {
@@ -78,8 +78,7 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           quotaStore: fastify.quotaStore,
           createExportToken: createExportTokenFactory(fastify),
           webBaseUrl: process.env.API_BASE_URL ?? "http://localhost:3055",
-          llmClient: createLlmClient(),
-          llmClientFor: getLlmClient,
+          llmConfig: loadLLMConfig(),
         },
         message
       );

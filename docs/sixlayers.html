@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareMemory 六层 AI 引擎架构</title>
+  <style>
+    :root {
+      --l1: #6366f1; --l1bg: #eef2ff;
+      --l2: #0891b2; --l2bg: #ecfeff;
+      --l3: #d97706; --l3bg: #fffbeb;
+      --l4: #059669; --l4bg: #ecfdf5;
+      --l5: #7c3aed; --l5bg: #f5f3ff;
+      --l6: #dc2626; --l6bg: #fef2f2;
+      --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    header { background: linear-gradient(135deg, #0f172a, #1e293b); color: #fff; padding: 2.5rem 1.5rem; text-align: center; }
+    header h1 { font-size: 1.8rem; margin-bottom: 0.5rem; }
+    header p { color: #94a3b8; font-size: 0.95rem; max-width: 720px; margin: 0 auto; }
+
+    .pipeline { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 0; padding: 2.5rem 1rem; max-width: 1200px; margin: 0 auto; }
+    .node { width: 140px; text-align: center; padding: 1rem 0.5rem; border-radius: 12px; font-weight: 700; font-size: 0.85rem; transition: transform .2s; }
+    .node:hover { transform: scale(1.05); }
+    .node .num { display: block; font-size: 1.6rem; font-weight: 800; margin-bottom: 0.2rem; }
+    .node .label { display: block; }
+    .arrow { font-size: 1.4rem; color: #94a3b8; margin: 0 0.3rem; user-select: none; }
+
+    .n1 { background: var(--l1); color: #fff; }
+    .n2 { background: var(--l2); color: #fff; }
+    .n3 { background: var(--l3); color: #fff; }
+    .n4 { background: var(--l4); color: #fff; }
+    .n5 { background: var(--l5); color: #fff; }
+    .n6 { background: var(--l6); color: #fff; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem 3rem; }
+
+    h2 { font-size: 1.4rem; margin: 2rem 0 1rem; border-left: 4px solid var(--l4); padding-left: 0.75rem; }
+
+    .layer { background: var(--card); border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.06); margin-bottom: 1.2rem; overflow: hidden; }
+    .layer-header { display: flex; align-items: center; cursor: pointer; padding: 1rem 1.25rem; gap: 0.75rem; user-select: none; }
+    .layer-header:hover { background: rgba(0,0,0,.01); }
+    .layer-badge { width: 42px; height: 42px; border-radius: 10px; display: flex; align-items: center; justify-content: center; color: #fff; font-weight: 800; font-size: 1rem; flex-shrink: 0; }
+    .layer-title { font-weight: 700; font-size: 1.05rem; }
+    .layer-sub { font-size: 0.85rem; color: var(--muted); }
+    .layer-arrow { margin-left: auto; transition: transform .3s; color: var(--muted); font-size: 1.1rem; }
+
+    .layer.open .layer-arrow { transform: rotate(90deg); }
+
+    .layer-body { display: none; padding: 0 1.25rem 1.25rem; border-top: 1px solid #f1f5f9; }
+    .layer.open .layer-body { display: block; }
+
+    .layer-body p { margin: 0.5rem 0; font-size: 0.9rem; }
+    .layer-body h4 { font-size: 0.85rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; margin: 1rem 0 0.4rem; }
+    pre { background: #1e293b; color: #e2e8f0; padding: 1rem; border-radius: 8px; overflow-x: auto; font-size: 0.82rem; line-height: 1.5; }
+    code { font-family: "SF Mono", "Fira Code", monospace; }
+
+    .flow-section { background: var(--card); border-radius: 12px; padding: 1.5rem; box-shadow: 0 1px 4px rgba(0,0,0,.06); margin-bottom: 1.5rem; }
+    .flow-section h3 { margin-bottom: 1rem; font-size: 1.05rem; }
+    .flow-diagram { display: flex; flex-direction: column; gap: 0.6rem; }
+    .flow-row { display: flex; align-items: center; gap: 0.5rem; font-size: 0.9rem; }
+    .flow-step { background: #f1f5f9; padding: 0.4rem 0.7rem; border-radius: 6px; font-weight: 600; font-size: 0.8rem; white-space: nowrap; }
+    .flow-desc { color: var(--muted); font-size: 0.85rem; }
+    .flow-arrow { color: #94a3b8; }
+
+    .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
+    .badge-green { background: #dcfce7; color: #166534; }
+    .badge-blue { background: #dbeafe; color: #1e40af; }
+    .badge-yellow { background: #fef3c7; color: #92400e; }
+    .badge-red { background: #fee2e2; color: #991b1b; }
+
+    .rel-table { width: 100%; border-collapse: collapse; margin: 0.8rem 0; font-size: 0.85rem; }
+    .rel-table th, .rel-table td { border: 1px solid #e5e7eb; padding: 0.5rem 0.75rem; text-align: left; }
+    .rel-table th { background: #f8fafc; font-weight: 600; }
+
+    @media (max-width: 900px) {
+      .pipeline { flex-direction: column; }
+      .arrow { transform: rotate(90deg); margin: -0.2rem 0; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>CareMemory AI 引擎 — 六层架构</h1>
+  <p>L1 感知 → L2 记忆 → L3 知识检索 → L4 规划 → L5 对话 → L6 安全 | 点击每层展开查看技术细节</p>
+</header>
+
+<!-- Pipeline overview -->
+<div class="pipeline">
+  <div class="node n1"><span class="num">L1</span><span class="label">感知层</span>Perception</div>
+  <span class="arrow">→</span>
+  <div class="node n2"><span class="num">L2</span><span class="label">记忆层</span>Memory</div>
+  <span class="arrow">→</span>
+  <div class="node n3"><span class="num">L3</span><span class="label">知识层</span>RAG</div>
+  <span class="arrow">→</span>
+  <div class="node n4"><span class="num">L4</span><span class="label">规划层</span>Planner</div>
+  <span class="arrow">→</span>
+  <div class="node n5"><span class="num">L5</span><span class="label">对话层</span>Dialogue</div>
+  <span class="arrow">→</span>
+  <div class="node n6"><span class="num">L6</span><span class="label">安全层</span>Safety</div>
+</div>
+
+<div class="container">
+
+  <!-- 数据流总览 -->
+  <div class="flow-section">
+    <h3>📊 一次消息请求的完整数据流</h3>
+    <div class="flow-diagram">
+      <div class="flow-row"><span class="flow-step n1" style="background:var(--l1);color:#fff">L1</span> <span class="flow-desc">读懂患者说了什么：提取意图/症状/异常标记</span></div>
+      <div class="flow-row" style="margin-left:3rem"><span class="flow-arrow">↳</span> <span class="flow-step n2" style="background:var(--l2);color:#fff">L2</span> <span class="flow-desc">把原始消息 + 感知结果写入 Event / Observation 表（持久化）</span></div>
+      <div class="flow-row" style="margin-left:3rem"><span class="flow-arrow">↳</span> <span class="flow-step n3" style="background:var(--l3);color:#fff">L3</span> <span class="flow-desc">从 RAG 语料库检索相关的哮喘医疗知识片段</span></div>
+      <div class="flow-row" style="margin-left:3rem"><span class="flow-arrow">↳</span> <span class="flow-step n4" style="background:var(--l4);color:#fff">L4</span> <span class="flow-desc">根据患者状态 + RAG 知识决定下一个问题（ask / end_session）</span></div>
+      <div class="flow-row" style="margin-left:3rem"><span class="flow-arrow">↳</span> <span class="flow-step n5" style="background:var(--l5);color:#fff">L5</span> <span class="flow-desc">把 planner 决策渲染成 WhatsApp 消息（文本 / 按钮）</span></div>
+      <div class="flow-row" style="margin-left:3rem"><span class="flow-arrow">↳</span> <span class="flow-step n6" style="background:var(--l6);color:#fff">L6</span> <span class="flow-desc">检查诊断/治疗语言，追加急救免责声明，决定放行或改写</span></div>
+    </div>
+  </div>
+
+  <!-- 用户旅程 时间线 -->
+  <h2>📅 用户旅程时间线</h2>
+  <div class="flow-section">
+    <p style="margin-bottom:0.8rem; font-size:0.9rem;">产品 MVP 的完整用户旅程，从首次接触到生成 Brief，贯穿六层引擎。</p>
+
+    <h3 style="margin:1rem 0 0.5rem;">阶段一：Onboarding（Day 0）</h3>
+    <div class="flow-diagram">
+      <div class="flow-row">
+        <span class="flow-step" style="background:#e0f2fe;">用户</span>
+        <span class="flow-desc">发送 START ASTHMA</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#e0f2fe;">L1</span>
+        <span class="flow-desc">识别 intent=initiate</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#e0f2fe;">L2</span>
+        <span class="flow-desc">创建 User + Cycle（ONBOARDING）</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-step" style="background:#e0f2fe;">系统</span>
+        <span class="flow-desc">发送欢迎语 + 隐私条款</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#fef3c7;">用户</span>
+        <span class="flow-desc">回复 AGREE</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#e0f2fe;">L2</span>
+        <span class="flow-desc">更新 consentGiven=true</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-step" style="background:#e0f2fe;">系统</span>
+        <span class="flow-desc">收集昵称 / 年龄 / 复诊日期 / 用药基线</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#e0f2fe;">L2</span>
+        <span class="flow-desc">Cycle 转入 ACTIVE</span>
+      </div>
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem;">阶段二：Check-in 周期（Day 1–28+）</h3>
+    <div class="flow-diagram">
+      <div class="flow-row">
+        <span class="flow-step" style="background:#f0fdf4;">调度器</span>
+        <span class="flow-desc">BullMQ 到达 cycle.nextCheckinAt</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L4 → L5</span>
+        <span class="flow-desc">Planner 生成第 1 题 → Dialogue 渲染按钮消息</span>
+      </div>
+      <div class="flow-row" style="margin-left:0;">
+        <span class="flow-step" style="background:#fef3c7;">用户</span>
+        <span class="flow-desc">点击按钮或自由文本回答</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L1 → L2</span>
+        <span class="flow-desc">识别意图 + 提取 observation → 持久化</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L4</span>
+        <span class="flow-desc">重新规划（预算 -1）</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L5 → L6</span>
+        <span class="flow-desc">渲染 + 安全校验 → 出站</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-desc" style="font-weight:600;">↑ 重复最多 3 次（3 题预算，或进入异常模式追加）</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-step" style="background:#f0fdf4;">end_session</span>
+        <span class="flow-desc">Budget 耗尽或全部 topic 覆盖</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L2</span>
+        <span class="flow-desc">CheckIn status = COMPLETED</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L2</span>
+        <span class="flow-desc">生成 NarrativeSummary（session）</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">L2</span>
+        <span class="flow-desc">生成 Disease Card</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#f0fdf4;">调度器</span>
+        <span class="flow-desc">安排下一次 check-in（48h/72h A/B）</span>
+      </div>
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem;">用户主动记录（两次 Check-in 之间）</h3>
+    <div class="flow-diagram">
+      <div class="flow-row">
+        <span class="flow-step" style="background:#fef3c7;">用户</span>
+        <span class="flow-desc">主动发消息（非 check-in 中）</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#e0f2fe;">L1 → L2</span>
+        <span class="flow-desc">提取 observation → 持久化</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#e0f2fe;">L5</span>
+        <span class="flow-desc">"已添加到记录"</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-desc" style="color:#64748b;">ℹ️ 不创建 CheckIn 记录，不消耗预算，不生成 NarrativeSummary/Disease Card</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-desc" style="color:#64748b;">ℹ️ 跨周期回复：系统询问 → 用户确认 YES → 保存到最近 cycle</span>
+      </div>
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem;">阶段三：周期结束 → Brief 生成</h3>
+    <div class="flow-diagram">
+      <div class="flow-row">
+        <span class="flow-step" style="background:#fae8ff;">系统</span>
+        <span class="flow-desc">4 周计划到达 Day 28</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#fae8ff;">L2</span>
+        <span class="flow-desc">Cycle status = COMPLETED</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#fae8ff;">用户</span>
+        <span class="flow-desc">CONTINUE → 新 cycle / STOP → 结束</span>
+      </div>
+      <div class="flow-row">
+        <span class="flow-step" style="background:#fae8ff;">用户</span>
+        <span class="flow-desc">复诊前打开 Brief 链接</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#fae8ff;">Web</span>
+        <span class="flow-desc">查看 Brief HTML / 下载 PDF</span>
+        <span class="flow-arrow">→</span>
+        <span class="flow-step" style="background:#fae8ff;">医生</span>
+        <span class="flow-desc">60 秒内阅读结构化摘要</span>
+      </div>
+    </div>
+
+    <h3 style="margin:1rem 0 0.5rem;">系统命令（任何时候）</h3>
+    <div class="flow-diagram">
+      <div class="flow-row">
+        <span class="flow-step" style="background:#fee2e2;">HELP</span>
+        <span class="flow-desc">显示所有可用命令</span>
+        <span class="flow-step" style="background:#fee2e2; margin-left:1rem;">STOP</span>
+        <span class="flow-desc">暂停提醒 + 取消周期</span>
+        <span class="flow-step" style="background:#fee2e2; margin-left:1rem;">DELETE MY DATA</span>
+        <span class="flow-desc">GDPR 硬删除所有数据</span>
+        <span class="flow-step" style="background:#fee2e2; margin-left:1rem;">EXPORT MY DATA</span>
+        <span class="flow-desc">生成 7 天有效 JSON 导出</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- L1 -->
+  <div class="layer open" id="l1">
+    <div class="layer-header" onclick="toggle('l1')">
+      <div class="layer-badge" style="background:var(--l1)">L1</div>
+      <div><div class="layer-title">感知层 Perception</div><div class="layer-sub">解析患者输入，提取意图、症状和异常信号</div></div>
+      <span class="layer-arrow">▶</span>
+    </div>
+    <div class="layer-body">
+      <p><strong>作用：</strong>把患者的 WhatsApp 消息（自由文本或按钮回复）解析成结构化数据。无论有没有 LLM（OpenAI），这层都必须运行。</p>
+
+      <h4>🔧 技术细节</h4>
+      <p><strong>文件：</strong><code>packages/engine/src/perception.ts</code> → <code>perceive()</code></p>
+      <p><strong>处理顺序（短路逻辑）：</strong></p>
+      <ol style="font-size:0.88rem; margin-left:1.5rem;">
+        <li><strong>接口初始化：</strong>填充 <code>messageId</code>、<code>timestamp</code>、<code>traceId</code>（UUID），默认 intent = answer</li>
+        <li><strong>修正意图检测：</strong>6 种正则匹配 "I was wrong / actually / correction" 等 → <code>intent: "correction"</code></li>
+        <li><strong>系统指令（疾病无关）：</strong>完全由规则处理 — <code>START &lt;disease&gt;</code>（泛化，默认 asthma）、<code>AGREE</code>、<code>SKIP</code> / <code>OK</code>、<code>STOP</code>、<code>DELETE MY DATA</code>、<code>EXPORT MY DATA</code>、<code>HELP</code>、<code>CONTINUE</code>、<code>YES</code> / <code>Y</code> / <code>ADD TO LAST RECORD</code> / <code>RECENT</code> 等直接返回对应 intent</li>
+        <li><strong>按钮映射：</strong>16 种哮喘按钮 ID → Observation 对象（症状 x4、用药 x4、活动 x2、依从性 x2、触发因素 x4）</li>
+        <li><strong>上下文感知：</strong>若 <code>context.checkInActive === false</code>，将自由文本意图设为 <code>question</code>（用户主动咨询）；可配合 <code>sessionObjective</code> 注入 LLM prompt</li>
+        <li><strong>安全启发式（始终运行，5 类检测）：</strong>
+          <ul style="margin:0.2rem 0 0 1rem;">
+            <li>严重症状语言：severe / can't breathe / chest tightness / blue lips / peak flow / no relief → <span class="badge badge-red">high safety flag</span></li>
+            <li>不良反应：rash / swelling / vomiting / dizziness / palpitations → <span class="badge badge-yellow">medium anomaly</span></li>
+            <li>复合信号冲突：3+ 维度同时恶化（worse + night + reliever + activity）→ <span class="badge badge-yellow">medium anomaly</span></li>
+            <li>严重度升级：sudden / rapidly / much worse / worst ever → <span class="badge badge-red">high anomaly</span></li>
+            <li>用药管理违规：reliever ≥ 3 次 + 未提及 controller → <span class="badge badge-yellow">medium anomaly</span></li>
+          </ul>
+        </li>
+        <li><strong>RAG 知识检索（L1 内嵌）：</strong>调用 <code>loadDiseaseCorpus(disease)</code> + <code>searchCorpus(corpus, text, {topK:3})</code>，为 LLM prompt 注入领域知识和为规则回退提供关键词</li>
+        <li>
+          <strong>LLM 路径（可选）：</strong>调用 <code>perceiveWithLlm()</code>，构建以下 System Prompt（含 RAG 上下文 + 会话状态）发送给 LLM，要求返回 JSON，temperature 0.2：
+          <div style="background:#1e293b;color:#e2e8f0;padding:0.75rem 1rem;border-radius:6px;margin:0.5rem 0;font-size:0.82rem;overflow-x:auto;font-family:ui-monospace,SFMono-Regular,monospace;line-height:1.5;">
+You are the perception layer of CareMemory. Current disease context: {disease}.<br>
+<span style="color:#94a3b8">{session_context_block — 注入当前 check-in 状态和目标}</span><br><br>
+Analyse the patient's free-text message and return ONLY valid JSON matching this schema:<br>
+{<br>
+&nbsp;&nbsp;"intent": { "primary": "answer" | "question" | "adverse_event" | "help" | "stop" | "delete_data" | "export_data", "confidence": number },<br>
+&nbsp;&nbsp;"extractedObservations": [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ "category": "symptom"|"medication"|"trigger"|"function"|"adverse_event"|"subjective"|"question",<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"concept": string, "value": any,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"attributes": { "severity"?: string, "frequency"?: string, "duration"?: string } }<br>
+&nbsp;&nbsp;],<br>
+&nbsp;&nbsp;"anomalies": [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ "type": "management_rule_violation"|"compound_signal_conflict"|"possible_adverse_event"<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;|"severity_escalation"|"pattern_contradiction",<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;"description": string, "severity": "low"|"medium"|"high" }<br>
+&nbsp;&nbsp;],<br>
+&nbsp;&nbsp;"safetyFlags": [<br>
+&nbsp;&nbsp;&nbsp;&nbsp;{ "type": string, "riskLevel": "none"|"low"|"medium"|"high", "description": string }<br>
+&nbsp;&nbsp;]<br>
+}<br>
+<span style="color:#94a3b8">{rag_context_block — top-3 RAG 检索结果注入}</span><br><br>
+Guidelines:<br>
+- Use "adverse_event" as primary intent when the patient reports a suspected drug reaction or side effect.<br>
+- Use "question" when the patient is asking their own question, not answering a check-in prompt.<br>
+- For each extracted observation, include "attributes" with severity, frequency, or duration when implied.<br>
+- Detect anomalies by type: management_rule_violation, compound_signal_conflict, severity_escalation, pattern_contradiction.<br>
+Do not diagnose or give treatment advice. Use concept names like "nighttime_symptoms", "reliever_use",<br>
+"activity_limitation", "trigger_exposure", "controller_adherence" when applicable.
+          </div>
+          <p style="font-size:0.85rem;color:var(--muted);margin-top:0.25rem;">
+            <strong>User Message:</strong> 原文直接作为 user role 消息发送。LLM 失败或未配置时降级到规则路径（关键词提取 + free_text_response）。
+          </p>
+        </li>
+        <li><strong>规则兜底（增强）：</strong>关键词提取（cough / wheeze / chest tightness / breathlessness / nighttime / reliever / controller）+ RAG 医学术语 + 数值提取；无匹配时回退为 <code>subjective / free_text_response</code></li>
+      </ol>
+
+      <h4>🔀 安全路由（safetyFlags → 下游分岔）</h4>
+      <div style="background:var(--l6bg);border-left:3px solid var(--l6);padding:0.75rem 1rem;margin:0.75rem 0;border-radius:0 6px 6px 0;font-size:0.85rem;">
+        <p style="margin:0 0 0.5rem;"><strong>L6 快速安全路径（engine.ts L499-537）：</strong></p>
+        <p style="margin:0 0 0.5rem;">若 <code>perception.safetyFlags</code> 中任意一条 <code>riskLevel === "high"</code> → <strong>直接返回安全提示，跳过 L4 Planner</strong>：</p>
+        <p style="margin:0 0 0.5rem;font-style:italic;">"I'm sorry you're struggling. If you're having severe breathing problems, call 999 or follow your asthma action plan now..."</p>
+        <p style="margin:0;">LLM 调用已记录（<code>llm_call</code> event ✅）+ 安全消息已落库（<code>outbound_message</code> event ✅）— 但 <strong>Planner 不会被调用</strong>，患者看不到 LLM 规划的追问。</p>
+      </div>
+      <div style="background:var(--l4bg);border-left:3px solid var(--l4);padding:0.75rem 1rem;margin:0.75rem 0;border-radius:0 6px 6px 0;font-size:0.85rem;">
+        <p style="margin:0 0 0.5rem;"><strong>异常模式路由（riskLevel = medium）：</strong></p>
+        <p style="margin:0;">若所有 safetyFlag 风险 ≤ medium 且存在 anomaly → Planner 进入 <strong>exception mode</strong>，追问最多 3 个澄清问题。患者看到的是 Planner 产生的自然语言追问，而非固定安全提示。</p>
+      </div>
+      <div style="font-size:0.85rem;color:var(--muted);margin:0.5rem 0;">
+        <strong>实际案例对比：</strong>
+        <table style="width:100%;font-size:0.82rem;margin-top:0.25rem;">
+          <tr><th style="text-align:left;padding:0.25rem 0.5rem;background:#f1f5f9;">输入</th><th style="text-align:left;padding:0.25rem 0.5rem;background:#f1f5f9;">LLM 判定</th><th style="text-align:left;padding:0.25rem 0.5rem;background:#f1f5f9;">路由</th><th style="text-align:left;padding:0.25rem 0.5rem;background:#f1f5f9;">患者看到</th></tr>
+          <tr><td style="padding:0.25rem 0.5rem;">"昨晚咳嗽严重，服用了急救药物"</td><td style="padding:0.25rem 0.5rem;">severe_symptom: <span style="color:#dc2626;font-weight:700;">high</span></td><td style="padding:0.25rem 0.5rem;">L6 快速路径</td><td style="padding:0.25rem 0.5rem;">呼叫 999 安全提示</td></tr>
+          <tr><td style="padding:0.25rem 0.5rem;">"前天晚上也咳嗽了，服用急救药物"</td><td style="padding:0.25rem 0.5rem;">symptom_medication_combination: <span style="color:#d97706;font-weight:700;">medium</span></td><td style="padding:0.25rem 0.5rem;">Planner 异常模式</td><td style="padding:0.25rem 0.5rem;">"Can you tell me more about what happened?"</td></tr>
+        </table>
+      </div>
+
+      <h4>📤 输出：PerceptionResult</h4>
+      <pre>{
+  messageId: string,              // 入站消息 ID
+  timestamp: Date,                // 消息时间戳
+  traceId: string,                // 调用追踪 UUID
+  intent: { primary: "answer" | "question" | "adverse_event" | "help" | "stop" | "delete_data"
+           | "export_data" | "consent" | "skip" | "confirm" | "initiate" | "correction"
+           | "continue_cycle" | "confirm_recent_context", confidence: 0-1 },
+  extractedObservations: [{ category: "symptom"|"medication"|"trigger"|"function"|"adverse_event"
+                           |"subjective"|"system_intent"|"question",
+                             concept, value, confidence, extractedBy: "rule"|"llm" }],
+  anomalies: [{ type: "possible_adverse_event"|"compound_signal_conflict"
+               |"severity_escalation"|"management_rule_violation"|"pattern_contradiction",
+                description, severity: "low"|"medium"|"high" }],
+  safetyFlags: [{ type, riskLevel: "none"|"low"|"medium"|"high", description }],
+  rawText
+}</pre>
+      <p><strong>传递给谁：</strong>intent + observations → L2（存储）+ L4（决策）；anomalies + safetyFlags → L4 + L6</p>
+    </div>
+  </div>
+
+  <!-- L2 -->
+  <div class="layer" id="l2">
+    <div class="layer-header" onclick="toggle('l2')">
+      <div class="layer-badge" style="background:var(--l2)">L2</div>
+      <div><div class="layer-title">记忆层 Memory</div><div class="layer-sub">所有数据的持久化读写中枢；GDPR 合规接口</div></div>
+      <span class="layer-arrow">▶</span>
+    </div>
+    <div class="layer-body">
+      <p><strong>作用：</strong>把所有事件（入站消息、感知结果、规划结果、LLM 调用、出站消息）持久化到 PostgreSQL。L2 是引擎唯一直接操作数据库的层。</p>
+
+      <h4>🔧 技术细节</h4>
+      <p><strong>文件：</strong><code>packages/engine/src/memory.ts</code></p>
+
+      <h4>核心函数</h4>
+      <table class="rel-table">
+        <tr><th>函数</th><th>用途</th><th>关键细节</th></tr>
+        <tr><td><code>saveInboundMessage()</code></td><td>保存患者原始消息</td><td>按 <code>platformMessageId</code> 去重，保证幂等性</td></tr>
+        <tr><td><code>saveObservations()</code></td><td>保存 L1 提取的结构化 observation</td><td>每条 ob 绑定到 cycle + event；支持 <code>superseded=true</code> 修正</td></tr>
+        <tr><td><code>saveOutboundMessages()</code></td><td>保存引擎发出的回复</td><td>生成 SHA256 的 <code>idempotencyKey</code>，状态为 <code>pending</code>，dispatch 层再更新为 <code>sent/failed</code></td></tr>
+        <tr><td><code>savePerceptionEvent()</code></td><td>存档完整 L1 结果</td><td>Event type: <code>observation_extracted</code></td></tr>
+        <tr><td><code>savePlannerEvent()</code></td><td>存档完整 L4 结果</td><td>Event type: <code>state_updated</code></td></tr>
+        <tr><td><code>saveLlmCallEvent()</code></td><td>LLM 调用审计日志</td><td>记录 model / input / output / token usage，GDPR 导出时默认排除</td></tr>
+        <tr><td><code>deleteUserData()</code></td><td>GDPR 硬删除</td><td>按依赖顺序删除（brief → diseaseCard → observation → event → checkIn → cycle → user）</td></tr>
+        <tr><td><code>exportUserData()</code></td><td>GDPR 数据导出</td><td>格式 <code>carememory-gdpr-export-v1</code>，默认排除 <code>llm_call</code> 事件</td></tr>
+      </table>
+
+      <h4>幂等性策略</h4>
+      <pre>idempotencyKey = "out:" + userId + ":" + timestamp + ":" + salt + ":" + sha256(text).slice(0,16)</pre>
+      <p>salt 来自 inboundEventId 或 checkIn.id，确保不同业务上下文产生的 outbound 不会冲突。</p>
+
+      <p><strong>被谁调用：</strong>引擎主流程 engine.ts 在所有阶段穿插调用 L2 函数</p>
+    </div>
+  </div>
+
+  <!-- L3 -->
+  <div class="layer" id="l3">
+    <div class="layer-header" onclick="toggle('l3')">
+      <div class="layer-badge" style="background:var(--l3)">L3</div>
+      <div><div class="layer-title">知识检索层 RAG</div><div class="layer-sub">基于 TF-IDF 关键词检索的哮喘医学知识库</div></div>
+      <span class="layer-arrow">▶</span>
+    </div>
+    <div class="layer-body">
+      <p><strong>作用：</strong>在 Planner 做决策前，从预编译的哮喘医学语料库中检索相关知识片段，注入到 Planner 的 reasoning 中。L3 不独立接收消息，而是 L4 在需要时拉取。</p>
+
+      <h4>🔧 技术细节</h4>
+      <p><strong>文件：</strong><code>packages/rag/src/index.ts</code></p>
+
+      <h4>语料库</h4>
+      <pre>packages/rag/documents/asthma/
+├── medical-overview.md      ← 哮喘的病理生理、分型、评估量表
+├── care-strategy.md         ← UK 哮喘管理指南、阶梯治疗方案
+├── conversation-patterns.md ← 对话模式（如何询问症状、如何回应异常）
+└── safety-rules.md          ← 安全红线规则</pre>
+      <p>这些 Markdown 文件通过 <code>pnpm corpus:reindex</code> 预编译为 <code>packages/rag/src/corpus.ts</code>（TS 模块），运行时直接加载，无需外部向量数据库。</p>
+
+      <h4>检索算法</h4>
+      <pre>searchCorpus(corpus, query, { topK: 2 })
+// 1. Tokenize query → 去停用词（≤2 chars）
+// 2. 对每个 corpus section 计算 TF-IDF 得分
+// 3. 标题命中额外 +2 分
+// 4. 返回 topK 个最相关 section</pre>
+      <p><strong>检索触发时机：</strong>Planner 每次执行规则逻辑时都会调用 <code>searchCorpus()</code>，查询词为 <code>"asthma {intent} {topic}"</code>。</p>
+
+      <h4>与 L4 的关系</h4>
+      <p>L3 是 L4 的<strong>附属模块</strong>——Planner 构造 reasoning 时会拼接 L3 返回的知识摘要：</p>
+      <pre>reasoning: "Cycle day 3. Retrieved: medical-overview: Asthma control assessment uses 3 core dimensions - nighttime symptoms, reliever use, activity limitation. Asking nighttime_symptoms to fill control assessment."</pre>
+    </div>
+  </div>
+
+  <!-- L4 -->
+  <div class="layer" id="l4">
+    <div class="layer-header" onclick="toggle('l4')">
+      <div class="layer-badge" style="background:var(--l4)">L4</div>
+      <div><div class="layer-title">规划层 Planner</div><div class="layer-sub">根据患者状态和对话上下文，决定下一个问题和行动计划</div></div>
+      <span class="layer-arrow">▶</span>
+    </div>
+    <div class="layer-body">
+      <p><strong>作用：</strong>基于患者当前状态（cycle day / 已回答哪些问题 / 是否有异常）+ L3 知识片段 + 预算约束，决定系统下一步行为。</p>
+
+      <h4>🔧 技术细节</h4>
+      <p><strong>文件：</strong><code>packages/engine/src/planner.ts</code> → <code>plan()</code></p>
+
+      <h4>决策优先级（从上到下短路判断）</h4>
+      <ol style="font-size:0.88rem; margin-left:1.5rem;">
+        <li><strong>异常模式（inExceptionMode）：</strong>检测到中高风险异常时触发，最多追加 3 个澄清问题（exception_clarification → exception_impact → exception_action），然后 <code>end_session</code> + 安全提示</li>
+        <li><strong>不良事件：</strong>recentObservations 中有 <code>adverse_event</code> → 立刻触发 <code>type: "safety_response"</code>（建议联系 GP/111）</li>
+        <li><strong>预算耗尽：</strong><code>budgetRemaining ≤ 0</code> → <code>end_session</code></li>
+        <li><strong>主题覆盖：</strong>从 <code>CHECKIN_QUESTIONS</code> 中按序选取未问过的 topic → <code>type: "ask"</code></li>
+        <li><strong>全部覆盖：</strong>所有 3 个 topic 问完 → <code>end_session</code></li>
+      </ol>
+
+      <h4>三个核心检查问题（CHECKIN_QUESTIONS）</h4>
+      <table class="rel-table">
+        <tr><th>Topic</th><th>问题目的</th><th>选项</th><th>预算消耗</th></tr>
+        <tr><td><code>nighttime_symptoms</code></td><td>夜间咳嗽/喘息</td><td>None / Mild / Disturbed sleep / Woke me up</td><td>1</td></tr>
+        <tr><td><code>reliever_use</code></td><td>缓解药物使用次数</td><td>0 / 1 / 2 / 3+</td><td>1</td></tr>
+        <tr><td><code>activity_limitation</code></td><td>日常活动受限</td><td>No / Yes</td><td>1</td></tr>
+      </table>
+
+      <h4>LLM 路径</h4>
+      <pre>systemPrompt 要求返回 JSON（reasoning + nextAction + safetyFlag）
+输入：disease, cycleDay, budgetRemaining, recentObservations, askedTopics, currentIntent
+temperature: 0.2
+安全保护：LLM 选择已问过的 topic 会被校验拦截并抛出异常 → 降级到规则逻辑</pre>
+
+      <h4>📤 输出：PlannerOutput</h4>
+      <pre>{
+  reasoning: "Cycle day 3. Retrieved: ...",
+  sessionObjective: "Track asthma control dimensions over the last 48 hours.",
+  nextAction: {
+    type: "ask" | "end_session" | "safety_response" | "inform",
+    topic, purpose, expectedResponseType, options, budgetCost
+  },
+  safetyFlag: "none" | "low" | "medium" | "high",
+  updatePatientState: {}
+}</pre>
+      <p><strong>传递给谁：</strong>L5（渲染消息）+ L6（安全检查）</p>
+    </div>
+  </div>
+
+  <!-- L5 -->
+  <div class="layer" id="l5">
+    <div class="layer-header" onclick="toggle('l5')">
+      <div class="layer-badge" style="background:var(--l5)">L5</div>
+      <div><div class="layer-title">对话层 Dialogue</div><div class="layer-sub">将规划决策渲染为 WhatsApp 消息格式</div></div>
+      <span class="layer-arrow">▶</span>
+    </div>
+    <div class="layer-body">
+      <p><strong>作用：</strong>把 L4 的抽象 <code>PlannerOutput</code> 转换成 WhatsApp 能识别的具体消息结构（文本或按钮）。这是平台适配前的最后一公里。</p>
+
+      <h4>🔧 技术细节</h4>
+      <p><strong>文件：</strong><code>packages/engine/src/dialogue.ts</code> → <code>renderMessage()</code></p>
+
+      <h4>渲染逻辑</h4>
+      <table class="rel-table">
+        <tr><th>nextAction.type</th><th>渲染结果</th></tr>
+        <tr><td><code>safety_response</code></td><td><code>{ type: "text", priority: "urgent" }</code></td></tr>
+        <tr><td><code>end_session</code></td><td><code>{ type: "text", priority: "normal" }</code></td></tr>
+        <tr><td><code>ask</code> + <code>single_choice</code></td><td><code>{ type: "buttons", buttons: [{id, title}] }</code> — 生成 WhatsApp 按钮组</td></tr>
+        <tr><td><code>ask</code> + <code>text</code></td><td><code>{ type: "text" }</code></td></tr>
+      </table>
+
+      <h4>按钮标签映射</h4>
+      <pre>nighttime_symptoms → ["None", "Mild", "Disturbed sleep", "Woke me up"]
+reliever_use       → ["0 times", "1 time", "2 times", "3+ times"]
+activity_limitation → ["No limitation", "Yes, limited"]</pre>
+
+      <h4>📤 输出：OutboundMessage</h4>
+      <pre>{
+  userId, conversationContext: { requiresSession, priority },
+  content: { type: "text" | "buttons", text, buttons?: [{id, title}] }
+}</pre>
+      <p><strong>传递给谁：</strong>L6（安全检查）→ 通过 L2 持久化 → dispatch 层发送到 WhatsApp / 本地测试工具</p>
+    </div>
+  </div>
+
+  <!-- L6 -->
+  <div class="layer" id="l6">
+    <div class="layer-header" onclick="toggle('l6')">
+      <div class="layer-badge" style="background:var(--l6)">L6</div>
+      <div><div class="layer-title">安全层 Safety</div><div class="layer-sub">拦截诊断/治疗语言，追加合规免责声明，分级风险管理</div></div>
+      <span class="layer-arrow">▶</span>
+    </div>
+    <div class="layer-body">
+      <p><strong>作用：</strong>对所有即将发给患者的消息做最终安全检查。L6 是最后一道防线，确保任何消息都不会包含诊断性语言或缺少急救提示。</p>
+
+      <h4>🔧 技术细节</h4>
+      <p><strong>文件：</strong><code>packages/engine/src/safety.ts</code> → <code>safetyCheck()</code></p>
+
+      <h4>拦截规则（PROHIBITED_PATTERNS）</h4>
+      <pre>"you (have|are having) (an asthma attack|a severe attack|an attack)"
+"you should (increase|decrease|stop|start|change) (your medication|your inhaler|the dose)"
+"take \\d+ puffs? (of|from) your"
+"you need (steroids|antibiotics|a nebulizer)"
+"your asthma is (severe|uncontrolled|life-threatening)"</pre>
+      <p>命中任一模式 → <span class="badge badge-red">approved: false, riskLevel: high</span>，消息被改写为安全兜底文本。</p>
+
+      <h4>免责声明追加</h4>
+      <table class="rel-table">
+        <tr><th>触发条件</th><th>追加内容</th></tr>
+        <tr><td>消息包含 asthma / wheez / inhaler / breath / reliever / controller</td><td>"If you're having severe breathing problems, call 999 or follow your asthma action plan."</td></tr>
+        <tr><td>消息包含 health / symptom / medication / doctor / clinic / visit</td><td>"This is based on patient-reported information only and is not medical advice."</td></tr>
+      </table>
+
+      <h4>引擎级聚合</h4>
+      <p>engine.ts 中的 <code>safetyWrapWithSummary()</code> 对多条 outbound 消息逐一调用 <code>safetyCheck()</code>，然后：</p>
+      <ul style="font-size:0.88rem; margin-left:1.5rem;">
+        <li>取所有结果中最高的 <code>riskLevel</code></li>
+        <li>合并去重所有 <code>requiredAddendums</code></li>
+        <li>任一消息未通过 → 整体 <code>approved: false</code></li>
+        <li>结果写入 <code>EngineTrace.safety</code></li>
+      </ul>
+
+      <h4>📤 输出：SafetyResult</h4>
+      <pre>{
+  approved: boolean,
+  riskLevel: "none" | "low" | "medium" | "high",
+  requiredAddendums: string[],
+  blockReason?: string
+}</pre>
+      <p><strong>最终去向：</strong>安全校验通过的消息 → L2 持久化 → dispatch 发送；未通过的消息被替换为安全兜底文本</p>
+    </div>
+  </div>
+
+  <!-- 关系表 -->
+  <h2>🔗 六层调用关系矩阵</h2>
+  <div class="flow-section">
+    <table class="rel-table">
+      <thead>
+        <tr><th></th><th>L1 感知</th><th>L2 记忆</th><th>L3 RAG</th><th>L4 规划</th><th>L5 对话</th><th>L6 安全</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><strong>谁调用它</strong></td><td>引擎主流程</td><td>引擎主流程 + L1/L4/L5</td><td>L1 Perception + L4 Planner</td><td>引擎主流程</td><td>引擎主流程</td><td>引擎主流程</td></tr>
+        <tr><td><strong>它调用谁</strong></td><td>LLM Client（可选）+ RAG</td><td>Prisma ORM (DB)</td><td>corpus.ts（预编译）</td><td>L3 RAG + LLM Client</td><td>—</td><td>—</td></tr>
+        <tr><td><strong>输入</strong></td><td>InboundMessage</td><td>Event/Observation/Message 对象</td><td>查询字符串</td><td>PlannerInput</td><td>PlannerOutput</td><td>OutboundMessage</td></tr>
+        <tr><td><strong>输出</strong></td><td>PerceptionResult</td><td>持久化到 PostgreSQL</td><td>CorpusSection[]</td><td>PlannerOutput</td><td>OutboundMessage</td><td>SafetyResult</td></tr>
+        <tr><td><strong>LLM 模式</strong></td><td>Chat (deepseek-chat) JSON</td><td>不涉及</td><td>不涉及</td><td>Reason (deepseek-v4-pro) JSON</td><td>不涉及</td><td>不涉及</td></tr>
+        <tr><td><strong>规则降级</strong></td><td>✅ 正则 + 按钮映射</td><td>N/A</td><td>N/A</td><td>✅ 队列 + 预算逻辑</td><td>N/A</td><td>N/A</td></tr>
+      </tbody>
+    </table>
+    <p style="margin-top:1rem; font-size:0.85rem; color:var(--muted);">LLM 相关层（L1/L4）在未配置 API Key 或配额耗尽时自动降级为纯规则逻辑。双 Provider 架构：L1 用 <code>LLM_CHAT_MODEL</code>（快模型），L4 用 <code>LLM_REASON_MODEL</code>（推理模型）。</p>
+  </div>
+
+  <!-- 关键设计决策 -->
+  <h2>⚙️ 关键架构设计</h2>
+  <div class="flow-section">
+    <table class="rel-table">
+      <tr><td><strong>崩溃恢复</strong></td><td>入站消息按 <code>platformMessageId</code> 去重；出站消息带 <code>idempotencyKey</code></td></tr>
+      <tr><td><strong>LLM 配额</strong></td><td>用户级每日软上限（Redis 原子计数 + 当天过期）；超出后自动降级规则逻辑 + 3 分钟内不重试</td></tr>
+      <tr><td><strong>A/B 实验</strong></td><td>基于 userId hash 的稳定分桶，控制 check-in 频率（48h/72h）和对话风格（v1/v2）</td></tr>
+      <tr><td><strong>异常模式</strong></td><td>中高风险异常 → 进入 exception mode → 最多 3 个澄清问题 → 结束 + 安全提示 → 写入 Disease Card Adverse Events</td></tr>
+      <tr><td><strong>迟到回答</strong></td><td>同一 cycle 内无 active check-in → 接受为补充更新；跨 cycle → 系统确认后保存到最近 cycle</td></tr>
+      <tr><td><strong>用户修正</strong></td><td>L1 识别修正意图 → 原 observation 标记 <code>superseded=true</code> → 新 observation 替代</td></tr>
+      <tr><td><strong>4 周周期延续</strong></td><td>28 天到期 → 提示 CONTINUE → 用户回复后创建新 cycle</td></tr>
+      <tr><td><strong>GDPR</strong></td><td>硬删除（<code>DELETE MY DATA</code>）+ 7 天有效导出链接（<code>EXPORT MY DATA</code>，默认排除 LLM 审计）</td></tr>
+    </table>
+  </div>
+
+</div>
+
+<script>
+function toggle(id) {
+  document.getElementById(id).classList.toggle('open');
+}
+</script>
+</body>
+</html>

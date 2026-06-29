@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@carememory/db";
-import { handleCheckInTrigger, scheduleNextCheckInOffset, type QuotaStore } from "@carememory/engine";
+import { handleCheckInTrigger, scheduleNextCheckInOffset, loadLLMConfig, type QuotaStore } from "@carememory/engine";
 import type { Redis } from "ioredis";
 import * as Sentry from "@sentry/node";
 import { Job, Queue, Worker } from "bullmq";
@@ -41,7 +41,7 @@ export async function processDueCheckIns(
     });
     if (existing) continue;
 
-    const outbound = await handleCheckInTrigger({ prisma, now, quotaStore }, cycle.id);
+    const outbound = await handleCheckInTrigger({ prisma, now, quotaStore, llmConfig: loadLLMConfig() }, cycle.id);
     if (outbound.length > 0) {
       await dispatchOutboundMessages(prisma, outbound, now);
     }

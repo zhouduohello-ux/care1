@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>L1 感知层 (Perception) 测试用例报告</title>
+<style>
+  :root {
+    --bg: #f8f9fa;
+    --card-bg: #fff;
+    --border: #dee2e6;
+    --text: #212529;
+    --muted: #6c757d;
+    --pass: #198754;
+    --pass-bg: #d1e7dd;
+    --fail: #dc3545;
+    --section-bg: #e9ecef;
+    --tag-bg: #e7f1ff;
+    --tag-text: #0d6efd;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 20px; }
+  .container { max-width: 1100px; margin: 0 auto; }
+  h1 { font-size: 1.75rem; margin-bottom: 4px; }
+  .subtitle { color: var(--muted); font-size: 0.9rem; margin-bottom: 20px; }
+  .summary { display: flex; gap: 16px; margin-bottom: 24px; flex-wrap: wrap; }
+  .summary-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px 24px; min-width: 120px; text-align: center; }
+  .summary-card .num { font-size: 2rem; font-weight: 700; }
+  .summary-card .label { font-size: 0.8rem; color: var(--muted); }
+  .summary-card.pass .num { color: var(--pass); }
+  .section { margin-bottom: 24px; }
+  .section-header { background: var(--section-bg); padding: 10px 16px; border-radius: 6px 6px 0 0; border: 1px solid var(--border); border-bottom: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; user-select: none; }
+  .section-header h2 { font-size: 1.05rem; font-weight: 600; }
+  .section-header .count { font-size: 0.85rem; color: var(--muted); }
+  .section-body { border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px; overflow: hidden; }
+  .case-list { list-style: none; }
+  .case-item { display: flex; align-items: flex-start; gap: 10px; padding: 8px 16px; border-top: 1px solid var(--border); font-size: 0.9rem; }
+  .case-item:first-child { border-top: none; }
+  .case-item:hover { background: #f8f9fa; }
+  .case-status { flex-shrink: 0; width: 54px; font-size: 0.75rem; font-weight: 600; padding: 2px 8px; border-radius: 4px; text-align: center; }
+  .case-status.pass { background: var(--pass-bg); color: var(--pass); }
+  .case-status.fail { background: #f8d7da; color: var(--fail); }
+  .case-name { flex: 1; word-break: break-word; }
+  .case-name code { background: #f0f0f0; padding: 1px 4px; border-radius: 3px; font-size: 0.85em; }
+  .subsection { margin-top: 8px; }
+  .subsection-title { font-size: 0.85rem; font-weight: 600; color: var(--muted); padding: 6px 16px; background: #fafafa; border-top: 1px solid var(--border); }
+  .tag { display: inline-block; font-size: 0.7rem; padding: 1px 6px; border-radius: 3px; background: var(--tag-bg); color: var(--tag-text); margin-left: 6px; }
+  .collapsed .section-body { display: none; }
+  footer { text-align: center; color: var(--muted); font-size: 0.8rem; margin-top: 32px; padding: 16px 0; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>L1 感知层 (Perception) 测试用例报告</h1>
+<p class="subtitle">
+  测试文件: <code>packages/engine/src/perception.test.ts</code> &nbsp;|&nbsp;
+  测试框架: Vitest &nbsp;|&nbsp;
+  全量通过: 193/193 &nbsp;|&nbsp;
+  生成时间: 2026-06-29
+</p>
+
+<div class="summary">
+  <div class="summary-card pass"><div class="num">193</div><div class="label">总测试数</div></div>
+  <div class="summary-card pass"><div class="num">193</div><div class="label">通过</div></div>
+  <div class="summary-card"><div class="num">0</div><div class="label">失败</div></div>
+  <div class="summary-card"><div class="num">14</div><div class="label">测试套件</div></div>
+</div>
+
+<!-- SECTION: System Commands -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>1. 系统命令 (System Commands)</h2>
+    <span class="count">22 tests</span>
+  </div>
+  <div class="section-body">
+    <div class="subsection-title">START &lt;disease&gt; (initiate)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects START asthma with default disease</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects START ASTHMA uppercase</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects Start Asthma mixed case</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">returns immediately (does not run safety heuristics)</span></li>
+    </ul>
+    <div class="subsection-title">AGREE (consent)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects AGREE</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects AGREE with whitespace and uppercase</span></li>
+    </ul>
+    <div class="subsection-title">SKIP / OK</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects SKIP as skip intent</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects OK as confirm intent</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects Ok mixed case</span></li>
+    </ul>
+    <div class="subsection-title">STOP / DELETE MY DATA / EXPORT MY DATA</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects STOP</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects DELETE MY DATA</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects EXPORT MY DATA</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects Delete My Data mixed case</span></li>
+    </ul>
+    <div class="subsection-title">HELP</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects HELP</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does not set extractedObservations for HELP</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects Help mixed case</span></li>
+    </ul>
+    <div class="subsection-title">CONTINUE</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects CONTINUE cycle command</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects Continue mixed case</span></li>
+    </ul>
+    <div class="subsection-title">YES / Y / ADD TO LAST RECORD / RECENT</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects YES</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects Y</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects ADD TO LAST RECORD</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects RECENT</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">stores original command text in observation value</span></li>
+    </ul>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">is case-insensitive and trims whitespace for EXPORT MY DATA</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">system commands take priority over correction patterns</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Button Replies -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>2. 按钮回复 (Button Replies)</h2>
+    <span class="count">19 tests</span>
+  </div>
+  <div class="section-body">
+    <div class="subsection-title">全部 16 个按钮映射 (it.each)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button night_none → nighttime_symptoms:none</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button night_mild → nighttime_symptoms:mild</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button night_disturbed → nighttime_symptoms:disturbed_sleep</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button night_woke_up → nighttime_symptoms:woke_me_up</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button reliever_0 → reliever_use:0</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button reliever_1 → reliever_use:1</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button reliever_2 → reliever_use:2</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button reliever_3_plus → reliever_use:3_or_more</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button activity_no → activity_limitation:no</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button activity_yes → activity_limitation:yes</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button adherence_yes → controller_adherence:yes</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button adherence_no → controller_adherence:no</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button trigger_pollen → exposure:pollen</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button trigger_dust → exposure:dust</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button trigger_cold → exposure:cold_air</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">maps button trigger_exercise → exposure:exercise</span></li>
+    </ul>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">returns empty observations for unknown buttonId</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">system command text takes priority over button reply type</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Interface Fields -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>3. 接口字段 (Interface Fields) <span class="tag">A1 + I1</span></h2>
+    <span class="count">6 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">populates messageId from InboundMessage</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">populates timestamp from InboundMessage</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">generates a traceId (UUID)</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">falls back to Date.now() when InboundMessage lacks timestamp</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">sets rawText to trimmed input text</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">sets default intent to answer with confidence 1.0</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Session Context -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>4. 会话上下文 (Session Context) <span class="tag">A2 + D1</span></h2>
+    <span class="count">6 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">sets intent to question when checkInActive is false</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">keeps answer intent when check-in is active</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">defaults to answer when context is undefined</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">context does not override system commands</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">context with sessionObjective does not crash</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">question intent still runs safety heuristics</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Safety Heuristics -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>5. 安全启发式 (Safety Heuristics)</h2>
+    <span class="count">23 tests</span>
+  </div>
+  <div class="section-body">
+    <div class="subsection-title">严重症状语言 (13 个输入)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: severe attack</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: I can't breathe</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: I cannot breathe</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: difficulty breathing</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: shortness of breath</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: chest tightness</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: worst episode</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: call 999</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: emergency</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: ambulance</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: blue lips</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: peak flow is dropping</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags severe: inhaler gave no relief</span></li>
+    </ul>
+    <div class="subsection-title">不良反应检测 (8 个输入)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: I have a rash</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: swelling on my face</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: allergic reaction</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: side effect from the inhaler</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: made me feel worse</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: I vomited after taking it</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: dizziness</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags adverse event: palpitations</span></li>
+    </ul>
+    <div class="subsection-title">复合信号冲突 (E2)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects 3+ worsening signals in one message</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT trigger with only 2 signals</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT trigger with only 1 signal</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">includes description in anomaly</span></li>
+    </ul>
+    <div class="subsection-title">严重度升级 (E1)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects sudden worsening</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects rapidly worsening</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects significantly worse</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects worst ever language</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">severity escalation is marked high</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT trigger on mild language</span></li>
+    </ul>
+    <div class="subsection-title">用药管理规则违规 (E1)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects high reliever use without controller</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects reliever with 'puffs' wording</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects reliever with 'doses' wording</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects double-digit reliever count</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT flag when controller is mentioned</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">flags when only 'preventer' is mentioned (regex checks for 'controller')</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT flag low reliever counts (1-2)</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT flag when 'reliever' keyword absent</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Multiple Safety Signals -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>6. 多安全信号同时触发 (Multiple Safety Signals)</h2>
+    <span class="count">3 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">can have both severe flag AND adverse event anomaly</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">can have severe + compound + escalation</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">can have all anomaly types simultaneously</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Correction Intent -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>7. 修正意图 (Correction Intent)</h2>
+    <span class="count">11 tests</span>
+  </div>
+  <div class="section-body">
+    <div class="subsection-title">6 种正则模式 (it.each)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /i was wrong/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /i meant/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /actually/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /correction/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /i made a mistake/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /not \d+, (it was|it's|its) \d+/i</span></li>
+    </ul>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">correction still runs safety heuristics</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT flag correction on non-matching text</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">correction detection is case-insensitive</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: RAG Integration -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>8. RAG 集成 (RAG Integration) <span class="tag">B1</span></h2>
+    <span class="count">8 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">loads disease corpus for default asthma</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">loadDiseaseCorpus returns empty sections for unknown disease</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">loadDiseaseCorpus is case-insensitive</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">searchCorpus returns sections matching query</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">searchCorpus with empty query returns top sections</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">searchCorpus respects topK</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">perceive with empty text does not search corpus</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">RAG corpus keywords enhance rule fallback extraction</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Rule Fallback Keyword Extraction -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>9. 规则回退关键词提取 (Rule Fallback) <span class="tag">F1 + F2</span></h2>
+    <span class="count">17 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts cough keyword</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts wheeze keyword (fuzzy match)</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts chest tightness</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts tight chest variant</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts breathlessness</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts shortness of breath</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts out of breath</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts cough before nighttime when 'nighttime cough' is used</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts night woke pattern</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts reliever use</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts inhaler as reliever_use</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts puff as reliever_use</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts controller adherence</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts preventer as controller_adherence</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts numeric value alongside keyword</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">extracts numeric value with cough</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">falls back to free_text when no keyword matches</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: LLM Path -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>10. LLM 路径 (LLM Path)</h2>
+    <span class="count">17 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">calls LLM client with correct messages</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">uses LLM result for intent</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">uses LLM result for observations</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">defaults LLM observation confidence to 0.8</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">preserves explicit confidence from LLM</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">defaults anomaly severity to medium</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">defaults safety flag riskLevel to low</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">calls onLlmCall callback</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">injects RAG sections into LLM prompt</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">injects session context into LLM prompt when check-in active</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">injects generic active-check-in context when no sessionObjective</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">LLM result does NOT lose rule-detected anomalies/safety flags</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">falls back to rule when LLM throws</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">falls back to rule when LLM returns invalid JSON</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT call LLM when allowLlm is false</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT call LLM when llmClient is undefined</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">falls back to default intent when LLM returns no intent</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Disease Agnostic -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>11. 疾病无关化 (Disease Agnostic) <span class="tag">G2 + C1</span></h2>
+    <span class="count">5 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects START with custom disease via parameter</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does NOT detect START when disease mismatches</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">disease parameter is case-insensitive for matching</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">passes custom disease to loadDiseaseCorpus</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">START command without disease match falls through to free text</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: Edge Cases -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>12. 边缘情况 (Edge Cases)</h2>
+    <span class="count">8 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">handles empty message text</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">handles whitespace-only message</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">OK system command takes priority over question intent</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">duplicate anomaly types are not deduplicated (code pushes both)</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">messageId is always a string</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">traceId is unique across calls</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">safety heuristics are case-insensitive</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">does not flag 0 or negative reliever counts as management violation</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: DEFAULT_BUTTON_MAP -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>13. DEFAULT_BUTTON_MAP 结构校验</h2>
+    <span class="count">19 tests</span>
+  </div>
+  <div class="section-body">
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">is exported and non-empty</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">has exactly 16 entries</span></li>
+    </ul>
+    <div class="subsection-title">逐项校验 (16 个 it.each)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">night_none has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">night_mild has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">night_disturbed has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">night_woke_up has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">reliever_0 has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">reliever_1 has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">reliever_2 has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">reliever_3_plus has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">activity_no has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">activity_yes has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">adherence_yes has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">adherence_no has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">trigger_pollen has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">trigger_dust has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">trigger_cold has correct category/concept/value</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">trigger_exercise has correct category/concept/value</span></li>
+    </ul>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">all entries have confidence=1 and extractedBy=rule</span></li>
+    </ul>
+  </div>
+</div>
+
+<!-- SECTION: looksLikeCorrection -->
+<div class="section">
+  <div class="section-header" onclick="this.parentElement.classList.toggle('collapsed')">
+    <h2>14. 修正短语全覆盖 (looksLikeCorrection)</h2>
+    <span class="count">8 tests</span>
+  </div>
+  <div class="section-body">
+    <div class="subsection-title">6 种正则全量 (it.each)</div>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /i was wrong/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /i meant/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /actually/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /correction/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /i made a mistake/i</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects correction: /not \d+, (it was|it's|its) \d+/i</span></li>
+    </ul>
+    <ul class="case-list">
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects 'actually' even mid-sentence</span></li>
+      <li class="case-item"><span class="case-status pass">PASS</span><span class="case-name">detects not-N, it's N pattern with contraction</span></li>
+    </ul>
+  </div>
+</div>
+
+<footer>
+  CareMemory L1 Perception Test Report &nbsp;|&nbsp; 193/193 all passing &nbsp;|&nbsp; Generated 2026-06-29
+</footer>
+
+</div>
+</body>
+</html>

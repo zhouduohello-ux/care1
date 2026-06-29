@@ -1,8 +1,11 @@
 import type { InboundMessage } from "@carememory/im-core";
-import type { PerceptionResult, Observation, Anomaly, SafetyFlag } from "./types.js";
+import { loadDiseaseCorpus, searchCorpus, type CorpusSection } from "@carememory/rag";
+import type { PerceptionResult, PerceptionContext, Observation, Anomaly, SafetyFlag } from "./types.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
+import crypto from "node:crypto";
 
-const SYSTEM_COMMANDS = ["START ASTHMA", "STOP", "HELP", "DELETE MY DATA", "EXPORT MY DATA", "AGREE", "SKIP", "OK"];
+// Non-disease-specific system commands (equality match)
+const SYSTEM_COMMANDS = ["STOP", "HELP", "DELETE MY DATA", "EXPORT MY DATA", "AGREE", "SKIP", "OK"];
 
 export interface LlmAuditCallback {
   (model: string, input: unknown, output: string, tokenUsage?: { prompt?: number; completion?: number; total?: number }): Promise<void> | void;
@@ -12,10 +15,15 @@ export async function perceive(
   message: InboundMessage,
   llmClient?: LLMClient,
   onLlmCall?: LlmAuditCallback,
-  allowLlm = true
+  allowLlm = true,
+  disease = "asthma",
+  context?: PerceptionContext
 ): Promise<PerceptionResult> {
   const text = (message.content.text ?? "").trim();
   const result: PerceptionResult = {
+    messageId: message.messageId,
+    timestamp: message.timestamp ?? new Date(),
+    traceId: crypto.randomUUID(),
     intent: { primary: "answer", confidence: 1.0 },
     extractedObservations: [],
     anomalies: [],
@@ -30,9 +38,10 @@ export async function perceive(
 
   // System commands are handled deterministically
   const upperText = text.toUpperCase();
-  if (upperText.startsWith("START ASTHMA")) {
+  const diseaseUpper = disease.toUpperCase();
+  if (upperText.startsWith("START ") && upperText.includes(diseaseUpper)) {
     result.intent = { primary: "initiate", confidence: 1.0 };
-    result.extractedObservations.push(makeObservation("system_intent", "start_asthma", { command: text }));
+    result.extractedObservations.push(makeObservation("system_intent", `start_${disease}`, { command: text, disease }));
     return result;
   }
   if (upperText === "AGREE") {
@@ -79,8 +88,15 @@ export async function perceive(
     return result;
   }
 
-  // Fast-path safety heuristics always run
-  if (/severe|can't breathe|cannot breathe|difficulty breathing|worst|999|emergency|ambulance/i.test(text)) {
+  // When no active check-in exists, treat free-text as user-initiated consultation.
+  // This allows the engine to distinguish "answering a check-in question" from
+  // "user reaching out on their own" (D8: intent stack, no budget consumption).
+  if (context?.checkInActive === false) {
+    result.intent = { primary: "question", confidence: 0.8 };
+  }
+
+  // Fast-path safety heuristics always run (base patterns + RAG safety-rules escalation triggers)
+  if (/severe|can'?t breathe|cannot breathe|difficulty breathing|shortness of breath|chest tightness|worst|999|emergency|ambulance|blue lips|peak flow|no relief/i.test(text)) {
     result.safetyFlags.push({
       type: "severe_symptom_language",
       riskLevel: "high",
@@ -88,7 +104,7 @@ export async function perceive(
     });
   }
 
-  if (/rash|swelling|allergic|side effect|made me feel worse/i.test(text)) {
+  if (/rash|swelling|allergic|side effect|made me feel worse|vomit|dizziness|palpitations/i.test(text)) {
     result.anomalies.push({
       type: "possible_adverse_event",
       description: "User reports possible adverse reaction.",
@@ -96,10 +112,47 @@ export async function perceive(
     });
   }
 
-  // Free-text: use LLM when available and quota allows, otherwise rule fallback
+  // Compound signal conflict: multiple worsening indicators in one message.
+  const compoundCount = [
+    /worse|worsening|increasing|more frequent/i,
+    /woke|waking|night|sleep/i,
+    /reliever|inhaler|puff/i,
+    /activity|exercise|walking|stairs/i,
+  ].filter((p) => p.test(text)).length;
+  if (compoundCount >= 3) {
+    result.anomalies.push({
+      type: "compound_signal_conflict",
+      description: "Multiple worsening signals detected in a single message.",
+      severity: "medium",
+    });
+  }
+
+  // Severity escalation: sudden or rapid worsening language.
+  if (/sudden|rapidly|much worse|significantly worse|worst ever/i.test(text)) {
+    result.anomalies.push({
+      type: "severity_escalation",
+      description: "Patient reports rapid or significant symptom escalation.",
+      severity: "high",
+    });
+  }
+
+  // Management rule violation: reliever overuse without controller mention.
+  if (/(\b[3-9]\b|10|\d{2,})\s*(times|puffs|doses)/i.test(text) && /\breliever\b/i.test(text) && !/\bcontroller\b/i.test(text)) {
+    result.anomalies.push({
+      type: "management_rule_violation",
+      description: "High reliever use reported without controller adherence. May indicate inadequate preventer control.",
+      severity: "medium",
+    });
+  }
+
+  // Load RAG context: retrieve relevant disease knowledge and safety rules
+  const corpus = loadDiseaseCorpus(disease);
+  const ragSections = text ? searchCorpus(corpus, text, { topK: 3 }) : [];
+
+  // Free-text: use LLM with RAG context when available, otherwise rule-based extraction
   if (llmClient && allowLlm) {
     try {
-      const llmResult = await perceiveWithLlm(llmClient, text, onLlmCall);
+      const llmResult = await perceiveWithLlm(llmClient, text, ragSections, disease, context, onLlmCall);
       result.intent = llmResult.intent;
       result.extractedObservations = llmResult.extractedObservations;
       result.anomalies.push(...llmResult.anomalies);
@@ -110,29 +163,53 @@ export async function perceive(
     }
   }
 
-  result.extractedObservations.push(makeObservation("subjective", "free_text_response", text));
+  // Rule-based extraction fallback: use RAG corpus keywords for basic concept mapping.
+  const ruleObs = extractWithRules(text, ragSections);
+  if (ruleObs.length > 0) {
+    result.extractedObservations.push(...ruleObs);
+  } else {
+    result.extractedObservations.push(makeObservation("subjective", "free_text_response", text));
+  }
   return result;
 }
 
 async function perceiveWithLlm(
   llmClient: LLMClient,
   text: string,
+  ragSections: CorpusSection[],
+  disease: string,
+  context: PerceptionContext | undefined,
   onLlmCall?: LlmAuditCallback
-): Promise<PerceptionResult> {
-  const systemPrompt = `You are the perception layer of CareMemory, a UK asthma follow-up assistant.
+): Promise<Pick<PerceptionResult, "intent" | "extractedObservations" | "anomalies" | "safetyFlags" | "rawText">> {
+  const ragContextBlock = ragSections.length > 0
+    ? `\nRelevant disease knowledge (use as reference for concept names and anomaly types):\n${ragSections.map((s) => `## ${s.title}${s.source ? ` (${s.source})` : ""}\n${s.content.trim()}`).join("\n\n")}\n`
+    : "";
+
+  const sessionContextBlock = context?.checkInActive && context.sessionObjective
+    ? `\nThe patient is currently responding to the check-in question: "${context.sessionObjective}"\n`
+    : context?.checkInActive
+      ? `\nThe patient is currently in an active check-in session.\n`
+      : "";
+
+  const systemPrompt = `You are the perception layer of CareMemory. Current disease context: ${disease}.${sessionContextBlock}
 Analyse the patient's free-text message and return ONLY valid JSON matching this schema:
 {
-  "intent": { "primary": "answer" | "adverse_event" | "help" | "stop" | "delete_data" | "export_data", "confidence": number },
+  "intent": { "primary": "answer" | "question" | "adverse_event" | "help" | "stop" | "delete_data" | "export_data", "confidence": number },
   "extractedObservations": [
-    { "category": "symptom" | "medication" | "trigger" | "function" | "adverse_event" | "subjective", "concept": string, "value": any }
+    { "category": "symptom" | "medication" | "trigger" | "function" | "adverse_event" | "subjective" | "question", "concept": string, "value": any, "attributes": { "severity"?: string, "frequency"?: string, "duration"?: string } }
   ],
   "anomalies": [
-    { "type": string, "description": string, "severity": "low" | "medium" | "high" }
+    { "type": "management_rule_violation" | "compound_signal_conflict" | "possible_adverse_event" | "severity_escalation" | "pattern_contradiction", "description": string, "severity": "low" | "medium" | "high" }
   ],
   "safetyFlags": [
     { "type": string, "riskLevel": "none" | "low" | "medium" | "high", "description": string }
   ]
-}
+}${ragContextBlock}
+Guidelines:
+- Use "adverse_event" as primary intent when the patient reports a suspected drug reaction or side effect (not just as an anomaly).
+- Use "question" when the patient is asking their own question, not answering a check-in prompt.
+- For each extracted observation, include an "attributes" object with severity, frequency, or duration when the message implies them.
+- Detect anomalies by type: management_rule_violation (response contradicts care guidelines), compound_signal_conflict (multiple worsening signals together), severity_escalation (sudden worsening), pattern_contradiction (contradicts known patterns).
 Do not diagnose or give treatment advice. Use concept names like "nighttime_symptoms", "reliever_use", "activity_limitation", "trigger_exposure", "controller_adherence" when applicable.`;
 
   const messages: LLMMessage[] = [
@@ -147,6 +224,8 @@ Do not diagnose or give treatment advice. Use concept names like "nighttime_symp
 
   const parsed = JSON.parse(content) as Partial<PerceptionResult>;
 
+  // Return only the LLM-populated fields; the caller (perceive) owns the full result
+  // and merges these into the pre-populated messageId/timestamp/traceId.
   return {
     intent: parsed.intent ?? { primary: "answer", confidence: 0.5 },
     extractedObservations: (parsed.extractedObservations ?? []).map((o) => ({
@@ -182,8 +261,13 @@ function makeObservation(category: Observation["category"], concept: string, val
   };
 }
 
-function mapButtonToObservation(buttonId: string, text: string): Observation | null {
-  const map: Record<string, Observation> = {
+function mapButtonToObservation(buttonId: string, _text: string): Observation | null {
+  return DEFAULT_BUTTON_MAP[buttonId] ?? null;
+}
+
+/** Default button→observation mapping for asthma. Override via `perceive()` options
+ *  when adding support for additional diseases. */
+export const DEFAULT_BUTTON_MAP: Record<string, Observation> = {
     night_none: { category: "symptom", concept: "nighttime_symptoms", value: "none", confidence: 1, extractedBy: "rule" },
     night_mild: { category: "symptom", concept: "nighttime_symptoms", value: "mild", confidence: 1, extractedBy: "rule" },
     night_disturbed: { category: "symptom", concept: "nighttime_symptoms", value: "disturbed_sleep", confidence: 1, extractedBy: "rule" },
@@ -201,5 +285,62 @@ function mapButtonToObservation(buttonId: string, text: string): Observation | n
     trigger_cold: { category: "trigger", concept: "exposure", value: "cold_air", confidence: 1, extractedBy: "rule" },
     trigger_exercise: { category: "trigger", concept: "exposure", value: "exercise", confidence: 1, extractedBy: "rule" },
   };
-  return map[buttonId] ?? null;
+
+/** Rule-based extraction fallback: use RAG corpus keywords for basic concept mapping
+ *  when LLM is unavailable. Extracts symptom/medication keywords and numeric values. */
+function extractWithRules(text: string, ragSections: CorpusSection[]): Observation[] {
+  const observations: Observation[] = [];
+  const lower = text.toLowerCase();
+
+  // Extract keywords from RAG corpus content
+  const medicalTerms = extractMedicalKeywords(ragSections);
+
+  // Map known symptom keywords
+  const symptomKeywords: Array<{ pattern: RegExp; concept: string; category: Observation["category"] }> = [
+    { pattern: /\bcough\b/i, concept: "cough", category: "symptom" },
+    { pattern: /\bwheez/i, concept: "wheeze", category: "symptom" },
+    { pattern: /\b(chest tightness|tight chest)\b/i, concept: "chest_tightness", category: "symptom" },
+    { pattern: /\b(shortness of breath|breathless|out of breath)\b/i, concept: "breathlessness", category: "symptom" },
+    { pattern: /\bnight(time)?\s*(woke|waking|wake|cough|symptom)\b/i, concept: "nighttime_symptoms", category: "symptom" },
+    { pattern: /\b(reliever|inhaler|puff)\b/i, concept: "reliever_use", category: "medication" },
+    { pattern: /\b(controller|preventer)\b/i, concept: "controller_adherence", category: "medication" },
+  ];
+
+  for (const kw of symptomKeywords) {
+    if (kw.pattern.test(lower)) {
+      // Try to extract a numeric value from the text near the keyword
+      const numMatch = text.match(/(\d+)/);
+      observations.push(makeObservation(kw.category, kw.concept, numMatch ? parseInt(numMatch[1], 10) : "reported"));
+      break; // One primary concept per fallback message
+    }
+  }
+
+  // Also check RAG medical-overview terms against the text
+  for (const term of medicalTerms) {
+    if (lower.includes(term.toLowerCase()) && observations.length === 0) {
+      observations.push(makeObservation("symptom", term.toLowerCase().replace(/\s+/g, "_"), "reported"));
+      break;
+    }
+  }
+
+  return observations;
+}
+
+/** Extract symptom-related keywords from RAG medical-overview sections. */
+function extractMedicalKeywords(sections: CorpusSection[]): string[] {
+  const keywords: string[] = [];
+  for (const s of sections) {
+    if (s.source === "medical-overview.md" || s.source === "safety-rules.md") {
+      // Extract quoted terms and key phrases from content
+      const matches = s.content.match(/\b(wheeze|cough|chest tightness|shortness of breath|breathless|blue lips|peak flow|waking|woken|reliever|controller|inhaler|exacerbation|sputum|phlegm)\b/gi);
+      if (matches) {
+        for (const m of matches) {
+          if (!keywords.includes(m.toLowerCase())) {
+            keywords.push(m.toLowerCase());
+          }
+        }
+      }
+    }
+  }
+  return keywords;
 }

@@ -11,6 +11,10 @@
     header { background: var(--accent); color: #fff; padding: 1rem; display: flex; justify-content: space-between; align-items: center; }
     header h1 { margin: 0; font-size: 1.1rem; }
     .badge { background: #b91c1c; color: #fff; padding: 0.25rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: bold; }
+    .header-right { display: flex; align-items: center; gap: 0.75rem; }
+    .header-right span { font-size: 0.85rem; }
+    .header-right button { background: rgba(255,255,255,0.2); color: #fff; border: 1px solid rgba(255,255,255,0.4); padding: 0.25rem 0.6rem; border-radius: 4px; cursor: pointer; font-size: 0.75rem; }
+    .header-right button:hover { background: rgba(255,255,255,0.35); }
     main { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; padding: 1rem; height: calc(100vh - 64px); }
     .panel { background: var(--panel); border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; flex-direction: column; overflow: hidden; }
     .panel h2 { margin: 0; padding: 0.75rem 1rem; font-size: 0.9rem; border-bottom: 1px solid #e5e7eb; }
@@ -24,7 +28,7 @@
     .quick button { border: 1px solid #d1d5db; background: #fff; border-radius: 4px; padding: 0.3rem 0.6rem; cursor: pointer; font-size: 0.8rem; }
     .quick button:hover { background: #f9fafb; }
     .input-row { display: flex; gap: 0.5rem; }
-    input[type="text"], select { padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; }
+    input[type="text"], input[type="password"], select { padding: 0.5rem; border: 1px solid #d1d5db; border-radius: 4px; }
     input[type="text"] { flex: 1; }
     button.primary { background: var(--accent); color: #fff; border: none; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
     button.secondary { background: #fff; color: #374151; border: 1px solid #d1d5db; padding: 0.5rem 1rem; border-radius: 4px; cursor: pointer; }
@@ -38,14 +42,43 @@
     .risk-low { color: #ca8a04; }
     .risk-medium { color: #ea580c; }
     .risk-high { color: #dc2626; font-weight: bold; }
+
+    /* Auth form */
+    #auth-overlay { display: flex; align-items: center; justify-content: center; height: 100vh; }
+    .auth-card { background: var(--panel); padding: 2rem; border-radius: 8px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); width: 320px; text-align: center; }
+    .auth-card h2 { margin: 0 0 0.5rem; font-size: 1.1rem; }
+    .auth-card p { margin: 0 0 1rem; color: #6b7280; font-size: 0.85rem; }
+    .auth-card input { width: 100%; margin-bottom: 0.75rem; }
+    .auth-card .btn-row { display: flex; gap: 0.5rem; }
+    .auth-card .btn-row button { flex: 1; }
+    .auth-card .error { color: #dc2626; font-size: 0.8rem; margin-top: 0.5rem; }
   </style>
 </head>
 <body>
-  <header>
+  <header id="header" style="display:none">
     <h1>CareMemory Local Test Tool</h1>
-    <span class="badge">LOCAL DEV ONLY</span>
+    <div class="header-right">
+      <span id="username-display"></span>
+      <button onclick="logout()">Logout</button>
+      <span class="badge">LOCAL DEV ONLY</span>
+    </div>
   </header>
-  <main>
+
+  <div id="auth-overlay">
+    <div class="auth-card">
+      <h2>CareMemory Test Tool</h2>
+      <p>Default password: <strong>123456</strong></p>
+      <input id="auth-username" type="text" placeholder="Username" onkeydown="if(event.key==='Enter') login()" />
+      <input id="auth-password" type="password" placeholder="Password" onkeydown="if(event.key==='Enter') login()" />
+      <div class="btn-row">
+        <button class="primary" onclick="login()">Login</button>
+        <button class="secondary" onclick="register()">Register</button>
+      </div>
+      <div id="auth-error" class="error"></div>
+    </div>
+  </div>
+
+  <main id="app-content" style="display:none">
     <div class="panel">
       <h2>Chat Simulation</h2>
       <div id="chat"></div>
@@ -53,14 +86,32 @@
         <div class="quick">
           <button onclick="send('START ASTHMA')">START ASTHMA</button>
           <button onclick="send('AGREE')">AGREE</button>
-          <button onclick="send('Sarah')">Sarah</button>
           <button onclick="send('SKIP')">SKIP</button>
-          <button onclick="sendButton('night_none')">None</button>
-          <button onclick="sendButton('night_mild')">Mild</button>
-          <button onclick="sendButton('reliever_0')">0 reliever</button>
-          <button onclick="sendButton('reliever_3_plus')">3+ reliever</button>
-          <button onclick="sendButton('activity_no')">No limit</button>
-          <button onclick="sendButton('activity_yes')">Limited</button>
+          <button onclick="send('OK')">OK</button>
+          <button onclick="send('YES')">YES</button>
+          <button onclick="send('CONTINUE')">CONTINUE</button>
+          <button onclick="send('HELP')">HELP</button>
+          <button onclick="send('STOP')">STOP</button>
+        </div>
+        <div class="quick">
+          <button onclick="sendButton('night_none')">🌙None</button>
+          <button onclick="sendButton('night_mild')">🌙Mild</button>
+          <button onclick="sendButton('night_disturbed')">🌙Disturbed</button>
+          <button onclick="sendButton('night_woke_up')">🌙Woke up</button>
+          <button onclick="sendButton('reliever_0')">💊0</button>
+          <button onclick="sendButton('reliever_1')">💊1</button>
+          <button onclick="sendButton('reliever_2')">💊2</button>
+          <button onclick="sendButton('reliever_3_plus')">💊3+</button>
+          <button onclick="sendButton('activity_no')">🏃No</button>
+          <button onclick="sendButton('activity_yes')">🏃Yes</button>
+          <button onclick="sendButton('adherence_yes')">✅Adhere</button>
+          <button onclick="sendButton('adherence_no')">❌Missed</button>
+        </div>
+        <div class="quick">
+          <button onclick="sendButton('trigger_pollen')">🌿Pollen</button>
+          <button onclick="sendButton('trigger_dust')">🏠Dust</button>
+          <button onclick="sendButton('trigger_cold')">❄️Cold</button>
+          <button onclick="sendButton('trigger_exercise')">🏋️Exercise</button>
         </div>
         <div class="input-row">
           <input id="message" type="text" placeholder="Type a message..." onkeydown="if(event.key==='Enter') sendInput()" />
@@ -94,9 +145,73 @@
     </div>
   </main>
   <script>
-    const userId = localStorage.getItem('cm_test_user') || 'test_user_' + Math.random().toString(36).slice(2, 8);
-    localStorage.setItem('cm_test_user', userId);
+    let userId = null;
     let lastTrace = null;
+
+    // ---- auth ----
+
+    function authError(msg) {
+      document.getElementById('auth-error').textContent = msg;
+    }
+
+    function showApp(username) {
+      document.getElementById('auth-overlay').style.display = 'none';
+      document.getElementById('header').style.display = 'flex';
+      document.getElementById('app-content').style.display = 'grid';
+      document.getElementById('username-display').textContent = username;
+    }
+
+    function showAuth() {
+      document.getElementById('auth-overlay').style.display = 'flex';
+      document.getElementById('header').style.display = 'none';
+      document.getElementById('app-content').style.display = 'none';
+    }
+
+    async function login() {
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value;
+      if (!username || !password) { authError('Please fill in both fields'); return; }
+      const res = await fetch('/dev/test-tool/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (!res.ok) { authError(data.error || 'Login failed'); return; }
+      userId = data.username;
+      localStorage.setItem('cm_test_auth', JSON.stringify({ username, loggedIn: true }));
+      showApp(username);
+      init();
+    }
+
+    async function register() {
+      const username = document.getElementById('auth-username').value.trim();
+      const password = document.getElementById('auth-password').value;
+      if (!username || !password) { authError('Please fill in both fields'); return; }
+      const res = await fetch('/dev/test-tool/api/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password })
+      });
+      const data = await res.json();
+      if (!res.ok) { authError(data.error || 'Registration failed'); return; }
+      userId = data.username;
+      localStorage.setItem('cm_test_auth', JSON.stringify({ username, loggedIn: true }));
+      showApp(username);
+      init();
+    }
+
+    function logout() {
+      localStorage.removeItem('cm_test_auth');
+      userId = null;
+      document.getElementById('chat').innerHTML = '';
+      document.getElementById('auth-username').value = '';
+      document.getElementById('auth-password').value = '';
+      authError('');
+      showAuth();
+    }
+
+    // ---- app ----
 
     function append(text, sender) {
       const chat = document.getElementById('chat');
@@ -113,7 +228,9 @@
       document.getElementById('perception').textContent = JSON.stringify({
         intent: trace.perception?.intent,
         observations: trace.perception?.extractedObservations,
+        anomalies: trace.perception?.anomalies,
         safetyFlags: trace.perception?.safetyFlags,
+        rawText: trace.perception?.rawText,
       }, null, 2);
       document.getElementById('planner').textContent = JSON.stringify({
         reasoning: trace.planner?.reasoning,
@@ -241,9 +358,21 @@
       document.getElementById('diseaseCard').textContent = data.diseaseCard ? JSON.stringify({ id: data.diseaseCard.id, version: data.diseaseCard.version, generatedAt: data.diseaseCard.generatedAt }, null, 2) : 'None';
     }
 
-    document.getElementById('now').textContent = new Date().toISOString();
-    loadPersonas();
-    loadState();
+    function init() {
+      document.getElementById('now').textContent = new Date().toISOString();
+      loadPersonas();
+      loadState();
+    }
+
+    // ---- startup ----
+    const auth = JSON.parse(localStorage.getItem('cm_test_auth') || 'null');
+    if (auth && auth.loggedIn && auth.username) {
+      userId = auth.username;
+      showApp(auth.username);
+      init();
+    } else {
+      showAuth();
+    }
   </script>
 </body>
 </html>

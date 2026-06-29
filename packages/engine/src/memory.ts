@@ -3,6 +3,7 @@ import { Prisma } from "@carememory/db";
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import crypto from "node:crypto";
 import type { Observation, PerceptionResult, PlannerOutput } from "./types.js";
+import type { LLMClient, LLMMessage } from "./llm.js";
 
 function makeOutboundIdempotencyKey(message: OutboundMessage, now: Date, salt: string): string {
   const hash = crypto
@@ -144,6 +145,55 @@ export async function saveLlmCallEvent(
       llmInput: input as unknown as Prisma.InputJsonValue,
       llmOutput: { output } as unknown as Prisma.InputJsonValue,
       tokenUsage: tokenUsage as unknown as Prisma.InputJsonValue,
+    },
+  });
+}
+
+/**
+ * Build a condensed textual summary of recent observations and call LLM to
+ * generate a natural-language narrative. Saves the result as a session-level
+ * NarrativeSummary.
+ *
+ * Follows func-spec §5.3 step 3: "异步触发 Narrative Summary 更新".
+ * Uses the model configured for "perception" (tech-spec §6.1 recommends GPT-4o-mini).
+ */
+export async function generateSessionNarrativeSummary(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  observations: Observation[],
+  llmClient: LLMClient,
+  now: Date
+): Promise<void> {
+  // Condense observations into a structured text prompt
+  const lines = observations.map((o, i) =>
+    `[${i + 1}] ${o.category}: ${o.concept} = ${JSON.stringify(o.value)}${o.attributes ? ` (${JSON.stringify(o.attributes)})` : ""}`
+  );
+  const obsText = lines.join("\n");
+
+  const systemPrompt = `You are the narrative summariser for CareMemory, a UK asthma follow-up assistant.
+Given a patient's reported observations from a single check-in session, produce a concise 2–3 sentence narrative in plain English.
+Focus on what changed, notable symptoms, medication use, triggers, and any concerns the patient raised.
+Do not diagnose, do not give treatment advice, and do not use clinical scale scores.`;
+
+  const userPrompt = `Check-in observations:\n${obsText || "No observations recorded for this session."}`;
+
+  const messages: LLMMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+
+  const content = await llmClient.complete(messages);
+
+  await prisma.narrativeSummary.create({
+    data: {
+      userId,
+      cycleId,
+      scope: "session",
+      generatedAt: now,
+      content,
+      keyObservationIds: observations.map((_, i) => `${i}`), // placeholder; real IDs not propagated here
     },
   });
 }

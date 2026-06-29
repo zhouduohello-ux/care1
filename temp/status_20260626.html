@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareMemory 功能开发进度评估报告</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card: #fff;
+      --text: #1e293b;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --done: #16a34a;
+      --done-bg: #dcfce7;
+      --partial: #d97706;
+      --partial-bg: #fffbeb;
+      --missing: #dc2626;
+      --missing-bg: #fee2e2;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.6;
+      margin: 0;
+      padding: 2rem 1rem;
+    }
+    .container { max-width: 1100px; margin: 0 auto; }
+    header {
+      background: linear-gradient(135deg, #0f172a, #1e293b);
+      color: #fff;
+      padding: 2rem;
+      border-radius: 12px;
+      margin-bottom: 2rem;
+    }
+    header h1 { margin: 0 0 0.5rem; font-size: 1.8rem; }
+    header p { margin: 0; color: #94a3b8; }
+    h2 { margin-top: 2.5rem; font-size: 1.4rem; border-left: 4px solid #3b82f6; padding-left: 0.75rem; }
+    h3 { margin-top: 2rem; font-size: 1.15rem; color: #334155; }
+    .meta { background: var(--card); padding: 1rem 1.25rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin-bottom: 1.5rem; }
+    table { width: 100%; border-collapse: collapse; background: var(--card); border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); margin: 1rem 0; font-size: 0.92rem; }
+    th, td { border: 1px solid var(--border); padding: 0.65rem 0.85rem; text-align: left; vertical-align: top; }
+    th { background: #f1f5f9; font-weight: 600; }
+    tr:nth-child(even) td { background: #fafafa; }
+    .badge {
+      display: inline-block;
+      padding: 0.2rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .done { background: var(--done-bg); color: var(--done); }
+    .partial { background: var(--partial-bg); color: var(--partial); }
+    .missing { background: var(--missing-bg); color: var(--missing); }
+    .summary-list { background: var(--card); padding: 1.25rem 1.5rem; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+    .summary-list ol { margin: 0; padding-left: 1.25rem; }
+    .summary-list li { margin: 0.6rem 0; }
+    footer { margin-top: 3rem; text-align: center; color: var(--muted); font-size: 0.85rem; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>CareMemory 功能开发进度评估报告</h1>
+      <p>基于 docs/tech-spec.md v0.2 与 docs/decisions.md v0.4 的代码实现缺口分析</p>
+    </header>
+
+    <div class="meta">
+      <strong>评估方式：</strong>代码走查（packages/*、apps/*、infra/*、.github/*）+ 关键文件抽查<br />
+      <strong>评估时间：</strong>2026-06-26
+    </div>
+
+    <h2>一、按 tech-spec.md 章节评估</h2>
+
+    <h3>第 3 章 推荐技术栈</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>Node.js 22 + TS、Fastify 5、PostgreSQL 16 + Prisma 6、Redis 7 + BullMQ</td><td><span class="badge done">已落地</span></td><td>package.json、apps/api/src/index.ts、packages/db/prisma/schema.prisma、infra/docker-compose.yml</td><td></td></tr>
+      <tr><td>Meta WhatsApp Business API</td><td><span class="badge done">已落地</span></td><td>packages/im-whatsapp/src/index.ts</td><td>HMAC 验证、payload 构建、模板选择已实现</td></tr>
+      <tr><td>Next.js 15、Playwright PDF</td><td><span class="badge done">已落地</span></td><td>apps/web/、apps/api/src/lib/pdf.ts</td><td></td></tr>
+      <tr><td>OpenAI/Anthropic LLM</td><td><span class="badge partial">部分</span></td><td>packages/engine/src/llm.ts</td><td>仅 OpenAI-compatible，<strong>Anthropic 未接入</strong></td></tr>
+      <tr><td>向量数据库（pgvector/Pinecone）</td><td><span class="badge partial">部分</span></td><td>infra/docker-compose.yml 有 pgvector 镜像</td><td><strong>未实际使用</strong>，RAG 为关键词匹配</td></tr>
+      <tr><td>Langfuse/Helicone</td><td><span class="badge partial">部分</span></td><td>环境变量存在</td><td><strong>无 SDK 集成</strong>，目前用 Event 表自审计</td></tr>
+      <tr><td>Resend/S3/R2</td><td><span class="badge missing">未完成</span></td><td></td><td>PDF 未上传对象存储，邮件分享未实现</td></tr>
+    </table>
+
+    <h3>第 4 章 系统架构</h3>
+    <table>
+      <tr><th>模块</th><th>状态</th><th>证据</th></tr>
+      <tr><td>IM Adapter</td><td><span class="badge done">已落地</span></td><td>packages/im-core/src/index.ts</td></tr>
+      <tr><td>L1–L6 引擎</td><td><span class="badge done">已落地</span></td><td>packages/engine/src/</td></tr>
+      <tr><td>RAG Corpus</td><td><span class="badge done">已落地</span></td><td>packages/rag/src/corpus.ts</td></tr>
+      <tr><td>disease-card-builder</td><td><span class="badge done">已落地</span></td><td>packages/disease-card/src/generator.ts</td></tr>
+      <tr><td>brief-builder</td><td><span class="badge done">已落地</span></td><td>packages/brief-templates/src/index.ts</td></tr>
+      <tr><td>check-in-scheduler</td><td><span class="badge done">已落地</span></td><td>apps/api/src/services/scheduler.ts</td></tr>
+      <tr><td>admin-api</td><td><span class="badge done">已落地</span></td><td>apps/api/src/routes/admin.ts</td></tr>
+    </table>
+
+    <h3>第 5 章 数据模型</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>User/Cycle/CheckIn/Event/Observation/NarrativeSummary/DiseaseCard/Brief</td><td><span class="badge done">已落地</span></td><td>packages/db/prisma/schema.prisma</td><td>模型齐全，含 pragmatic 扩展字段</td></tr>
+      <tr><td>GDPR 删除/导出</td><td><span class="badge done">已落地</span></td><td>packages/engine/src/memory.ts、apps/api/src/routes/export.ts</td><td></td></tr>
+      <tr><td>90 天未激活匿名化</td><td><span class="badge missing">未完成</span></td><td></td><td>无定时任务</td></tr>
+      <tr><td>12 个月 LLM 日志保留</td><td><span class="badge missing">未完成</span></td><td></td><td>无自动清理</td></tr>
+    </table>
+
+    <h3>第 6 章 LLM / RAG 基础设施</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>分层模型选择</td><td><span class="badge done">已落地</span></td><td>packages/engine/src/llm.ts loadLLMConfig</td><td></td></tr>
+      <tr><td>RAG Pipeline（分块 → Embedding → 向量库 → Top-K）</td><td><span class="badge partial">部分</span></td><td>packages/rag/src/index.ts</td><td>只有 Markdown 分块 + TF-IDF 关键词得分，<strong>无 embedding/向量库</strong></td></tr>
+      <tr><td>LLM 可观测性</td><td><span class="badge partial">部分</span></td><td>Event 表记录 LLM 输入输出</td><td><strong>无 Langfuse/Helicone</strong>，保留期限未执行</td></tr>
+    </table>
+
+    <h3>第 7 章 IM 接入设计</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>平台无关消息模型</td><td><span class="badge done">已落地</span></td><td>packages/im-core/src/index.ts</td><td></td></tr>
+      <tr><td>Webhook 流程（签名验证 → 解析 → 去重 → Engine）</td><td><span class="badge done">已落地</span></td><td>apps/api/src/routes/webhooks.ts</td><td></td></tr>
+      <tr><td>24h 会话窗口</td><td><span class="badge partial">部分</span></td><td>apps/api/src/lib/dispatch-outbound.ts、apps/api/src/services/scheduler.ts</td><td>已做模板 fallback 和提醒；<strong>提醒后仍无回复未标记 MISSED</strong></td></tr>
+      <tr><td>WhatsApp Adapter</td><td><span class="badge done">已落地</span></td><td>packages/im-whatsapp/src/index.ts、templates.ts</td><td></td></tr>
+    </table>
+
+    <h3>第 8 章 AI-native 引擎实现</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>L1→L2→L6 快速路径→L3→L4→L5→L6 流程</td><td><span class="badge done">已落地</span></td><td>packages/engine/src/engine.ts</td><td></td></tr>
+      <tr><td>L3 RAG 注入 Planner</td><td><span class="badge partial">部分</span></td><td>packages/engine/src/planner.ts</td><td>规则 planner 调了 searchCorpus，<strong>LLM planner 未注入 retrievedKnowledge</strong></td></tr>
+      <tr><td>异步任务（narrative / Disease Card / Brief 通过 BullMQ）</td><td><span class="badge partial">部分</span></td><td>apps/api/src/services/scheduler.ts</td><td>目前只有 scan-checkins/scan-reminders；<strong>narrative/Disease Card/Brief 均在入站 handler 同步执行</strong></td></tr>
+    </table>
+
+    <h3>第 9 章 Web / PWA / PDF</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>Disease Card 页面</td><td><span class="badge done">已落地</span></td><td>apps/web/src/app/c/[cardId]/page.tsx</td><td></td></tr>
+      <tr><td>Brief 页面</td><td><span class="badge done">已落地</span></td><td>apps/web/src/app/b/[briefId]/page.tsx</td><td></td></tr>
+      <tr><td>PDF 生成</td><td><span class="badge partial">部分</span></td><td>apps/api/src/lib/pdf.ts、apps/api/src/routes/briefs.ts</td><td>即时生成流式返回；<strong>未上传对象存储、无 30 天清理</strong></td></tr>
+    </table>
+
+    <h3>第 10 章 部署与基础设施</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>Render 蓝图、Dockerfile、自托管 compose</td><td><span class="badge done">已落地</span></td><td>infra/render.yaml、Dockerfile、infra/docker-compose.prod.yml</td><td></td></tr>
+      <tr><td>CI/CD</td><td><span class="badge done">已落地</span></td><td>.github/workflows/ci.yml、.github/workflows/deploy.yml</td><td></td></tr>
+      <tr><td>对象存储 / EU 数据驻留 / Secrets 管理</td><td><span class="badge missing">未完成</span>/<span class="badge partial">部分</span></td><td></td><td>未接入 S3/R2；Render 区域未指定；仅用环境变量</td></tr>
+    </table>
+
+    <h3>第 11 章 安全与合规</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>传输加密/静态加密</td><td><span class="badge partial">部分</span></td><td></td><td>TLS 依赖平台；PostgreSQL 全盘加密依赖托管商；无应用层加密</td></tr>
+      <tr><td>AI 安全（禁止诊断/治疗/急救判断）</td><td><span class="badge done">已落地</span></td><td>packages/engine/src/safety.ts</td><td></td></tr>
+      <tr><td>合规清单（隐私政策、同意、导出删除、免责声明）</td><td><span class="badge partial">部分</span></td><td>apps/web/src/app/privacy/page.tsx、onboarding.ts、export/delete 路由</td><td>“不用于模型训练”为策略声明，无技术强制；LLM 日志保留未执行</td></tr>
+      <tr><td>内容安全</td><td><span class="badge done">已落地</span></td><td>safety.ts、templates.ts</td><td>哮喘急救提示已兜底</td></tr>
+    </table>
+
+    <h3>第 12 章 开发环境</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th></tr>
+      <tr><td>本地启动、迁移、dev server</td><td><span class="badge done">已落地</span></td><td>package.json scripts、infra/docker-compose.yml</td></tr>
+    </table>
+
+    <h3>第 13 章 测试策略</h3>
+    <table>
+      <tr><th>要求</th><th>状态</th><th>证据</th><th>备注</th></tr>
+      <tr><td>单元测试</td><td><span class="badge done">已落地</span></td><td>*.test.ts 遍布 engine/rag/im/api/web</td><td></td></tr>
+      <tr><td>集成测试</td><td><span class="badge partial">部分</span></td><td>Webhook、DB、PDF 有覆盖</td><td>RAG 准确性仅关键词 smoke</td></tr>
+      <tr><td>E2E 测试</td><td><span class="badge done">已落地</span></td><td>tests/scenarios/run-scenario.ts + 6 个 scenario</td><td></td></tr>
+      <tr><td>合规测试</td><td><span class="badge partial">部分</span></td><td>safety、export/delete、invalid token 有覆盖</td><td>24h 模板-only 场景未专门覆盖</td></tr>
+    </table>
+
+    <h2>二、按 decisions.md 评估（D1–D22）</h2>
+    <table>
+      <tr><th>决策</th><th>标题</th><th>状态</th><th>备注</th></tr>
+      <tr><td>D1</td><td>疾病通用引擎 vs 哮喘专用</td><td><span class="badge partial">部分</span></td><td>模型通用，但 asthma 问题、感知 prompt、Disease Card 评分硬编码</td></tr>
+      <tr><td>D2</td><td>RAG Corpus + LLM 语义理解</td><td><span class="badge partial">部分</span></td><td>Corpus 存在，但检索为关键词，非语义</td></tr>
+      <tr><td>D3</td><td>六层引擎</td><td><span class="badge done">已落地</span></td><td></td></tr>
+      <tr><td>D4</td><td>四层 RAG Corpus</td><td><span class="badge done">已落地</span></td><td>medical/care/conversation/safety 文档齐全</td></tr>
+      <tr><td>D5</td><td>Event Log + Observations + Narrative Summary</td><td><span class="badge partial">部分</span></td><td>只有 session narrative；cycle/longitudinal 缺失</td></tr>
+      <tr><td>D6</td><td>Session Objective + Per-turn Re-planning</td><td><span class="badge done">已落地</span></td><td>CheckIn.sessionObjective 每次 inbound 调用 plan</td></tr>
+      <tr><td>D7</td><td>3 题预算 + 异常覆盖</td><td><span class="badge done">已落地</span></td><td>budgetRemaining + EXCEPTION_QUESTIONS</td></tr>
+      <tr><td>D8</td><td>用户主动咨询不占用预算</td><td><span class="badge missing">未完成</span></td><td>无 intent stack / consultation 路径</td></tr>
+      <tr><td>D9</td><td>L5 LLM 自由生成 + 约束校验</td><td><span class="badge missing">未完成</span></td><td>dialogue.ts 纯规则，未调用 LLM</td></tr>
+      <tr><td>D10</td><td>IM 兼容层</td><td><span class="badge done">已落地</span></td><td>im-core + im-whatsapp</td></tr>
+      <tr><td>D11</td><td>24h 窗口策略</td><td><span class="badge partial">部分</span></td><td>fallback + 提醒已做，未标记 MISSED</td></tr>
+      <tr><td>D12</td><td>Disease Card 核心资产，Brief 导出</td><td><span class="badge done">已落地</span></td><td></td></tr>
+      <tr><td>D13</td><td>不做临床量表推断</td><td><span class="badge done">已落地</span></td><td>输出 CareMemory 三级指标</td></tr>
+      <tr><td>D14</td><td>CareMemory 三级指标</td><td><span class="badge done">已落地</span></td><td>assessControl + 置信度</td></tr>
+      <tr><td>D15</td><td>LLM 输出经安全层</td><td><span class="badge done">已落地</span></td><td>safety.ts</td></tr>
+      <tr><td>D16</td><td>MVP 范围边界 UK × 哮喘 × WhatsApp</td><td><span class="badge done">已落地</span></td><td></td></tr>
+      <tr><td>D17</td><td>7 天 / 4 周 / 1–3 月价值节奏</td><td><span class="badge done">已落地</span></td><td></td></tr>
+      <tr><td>D18</td><td>用户修正历史回答</td><td><span class="badge done">已落地</span></td><td>supersededById / superseded</td></tr>
+      <tr><td>D19</td><td>LLM 成本限流</td><td><span class="badge done">已落地</span></td><td>Redis quota store + fallback</td></tr>
+      <tr><td>D20</td><td>A/B 测试框架</td><td><span class="badge done">已落地</span></td><td>userId hash 分桶</td></tr>
+      <tr><td>D21</td><td>出站消息幂等性</td><td><span class="badge done">已落地</span></td><td>idempotencyKey + pending/sent/failed</td></tr>
+      <tr><td>D22</td><td>跨 cycle 迟到回答</td><td><span class="badge done">已落地</span></td><td>confirm_recent_context</td></tr>
+    </table>
+
+    <h2>三、Top 未完成 / 部分完成项汇总</h2>
+    <div class="summary-list">
+      <ol>
+        <li><strong>RAG 语义化</strong>：关键词检索 → 需 embedding + pgvector 向量检索，并将结果注入 LLM planner prompt。</li>
+        <li><strong>L5 对话层 LLM 化</strong>：当前是硬编码渲染，需实现 LLM 自由生成 + 平台约束校验（D9）。</li>
+        <li><strong>用户主动咨询流程</strong>：D8 要求的 intent stack、预算绕过、返回原 check-in 未实现。</li>
+        <li><strong>24h 提醒后标记 MISSED</strong>：scheduler 只发了提醒，未处理仍无回复的 check-in。</li>
+        <li><strong>异步任务 Worker 化</strong>：narrative summary、Disease Card、Brief 生成应拆为 BullMQ 异步任务；cycle/longitudinal narrative 缺失。</li>
+        <li><strong>多病种可插拔</strong>：asthma 逻辑需抽象为 disease profile，支持未来 IBD/糖尿病等。</li>
+        <li><strong>外部集成</strong>：对象存储（PDF 持久化）、Resend（邮件分享）、Langfuse（LLM 可观测性）。</li>
+        <li><strong>数据保留策略自动化</strong>：90 天未激活清理、12 个月 LLM 日志清理。</li>
+        <li><strong>Anthropic 多供应商</strong>：目前只有 OpenAI-compatible provider。</li>
+      </ol>
+    </div>
+
+    <footer>
+      Generated by Kimi Code · CareMemory Status Assessment · 2026-06-26
+    </footer>
+  </div>
+</body>
+</html>

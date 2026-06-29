@@ -8,7 +8,7 @@ import { perceive } from "./perception.js";
 import { safetyCheck } from "./safety.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
-import type { LLMClient } from "./llm.js";
+import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
 import { hasLlmQuota, incrementLlmQuota } from "./llm-quota.js";
 import { scheduleNextCheckInOffset, getBucket } from "./experiments.js";
 import {
@@ -21,6 +21,7 @@ import {
   getRecentObservations,
   deleteUserData,
   supersedePreviousObservations,
+  generateSessionNarrativeSummary,
 } from "./memory.js";
 import { getPendingOnboardingField, handleOnboardingInput, askNext } from "./onboarding.js";
 
@@ -44,8 +45,36 @@ function emptyPlannerOutput(purpose: string): PlannerOutput {
   };
 }
 
+/** Cache OpenAI clients by (layer, model, temperature) tuple. */
+const llmClientCache = new Map<string, LLMClient>();
+
 function resolveLlmClient(context: EngineContext, model: LlmModelType): LLMClient | undefined {
-  return context.llmClientFor?.(model) ?? context.llmClient;
+  const cfg = context.llmConfig;
+  if (!cfg?.enabled) return undefined;
+
+  const layerConfig = cfg.layers[model];
+  const provider = layerProvider(model);
+  const providerConfig = cfg[provider];
+
+  if (!providerConfig.apiKey || !providerConfig.baseUrl) return undefined;
+
+  const effectiveModel = layerConfig.model || providerConfig.model;
+  if (!effectiveModel) return undefined;
+
+  const cacheKey = `${model}:${provider}:${effectiveModel}:${layerConfig.temperature}`;
+
+  let client = llmClientCache.get(cacheKey);
+  if (!client) {
+    client = createOpenAIClient({
+      apiKey: providerConfig.apiKey,
+      baseUrl: providerConfig.baseUrl,
+      model: effectiveModel,
+      fallbackModel: providerConfig.fallbackModel,
+      temperature: layerConfig.temperature,
+    });
+    llmClientCache.set(cacheKey, client);
+  }
+  return client;
 }
 
 function summarizeSafety(results: SafetyResult[]): SafetyResult {
@@ -119,16 +148,7 @@ export async function processInbound(
   const userId = message.userId ?? message.channelId;
   let cycle: Cycle | null = null;
 
-  // L1 Perception
-  const auditLlmCall = async (
-    model: string,
-    input: unknown,
-    output: string,
-    tokenUsage?: { prompt?: number; completion?: number; total?: number }
-  ) => {
-    await saveLlmCallEvent(prisma, userId, cycle?.id, model, input, output, tokenUsage);
-    await incrementLlmQuota(context.quotaStore, userId, context.now);
-  };
+  // L1 Perception — audit callback defined after user resolution below
 
   // Resolve user/cycle context before perception so we can enforce per-user LLM quotas.
   let user = await prisma.user.findUnique({ where: { phoneNumber: userId } });
@@ -138,6 +158,16 @@ export async function processInbound(
         orderBy: { startedAt: "desc" },
       })
     : null;
+
+  const auditLlmCall = async (
+    model: string,
+    input: unknown,
+    output: string,
+    tokenUsage?: { prompt?: number; completion?: number; total?: number }
+  ) => {
+    await saveLlmCallEvent(prisma, user?.id ?? userId, cycle?.id, model, input, output, tokenUsage);
+    await incrementLlmQuota(context.quotaStore, user?.id ?? userId, context.now);
+  };
 
   const allowLlm = !user || (await hasLlmQuota(context.quotaStore, user.id, context.now));
   if (user && !allowLlm) {
@@ -152,7 +182,20 @@ export async function processInbound(
     );
   }
 
-  const perception = await perceive(message, resolveLlmClient(context, "perception"), auditLlmCall, allowLlm);
+  // Resolve check-in context before perception so L1 can use session awareness.
+  let activeCheckIn = user && cycle
+    ? await prisma.checkIn.findFirst({
+        where: { cycleId: cycle.id, status: { in: ["SENT", "SCHEDULED"] } },
+        orderBy: { scheduledAt: "desc" },
+      })
+    : null;
+
+  const perceptionCtx = {
+    checkInActive: activeCheckIn !== null,
+    sessionObjective: activeCheckIn?.sessionObjective ?? undefined,
+  } satisfies import("./types.js").PerceptionContext;
+
+  const perception = await perceive(message, resolveLlmClient(context, "perception"), auditLlmCall, allowLlm, cycle?.disease ?? "asthma", perceptionCtx);
 
   // Onboarding initiation
   if (perception.intent.primary === "initiate" && !user) {
@@ -431,6 +474,22 @@ export async function processInbound(
       };
     }
 
+    // When the user sends "START ASTHMA" (intent=initiate) during onboarding, skip directly
+    // to the consent prompt (or the next onboarding question if consent is already given).
+    // This prevents "START ASTHMA" from being consumed as a nickname or other field value.
+    if (perception.intent.primary === "initiate") {
+      if (getPendingOnboardingField(user)) {
+        const { messages } = askNext(userId, user);
+        const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
+        await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, context.now, inboundEventId);
+        return {
+          messages: safeMessages,
+          trace: { perception, planner: emptyPlannerOutput(safeMessages[0]?.content.text ?? ""), safety: summary },
+        };
+      }
+      // Fall through to the consent fallback below
+    }
+
     const pending = getPendingOnboardingField(user);
     if (pending) {
       const { messages } = await handleOnboardingInput(prisma, user, cycle, perception.rawText, context.now);
@@ -471,24 +530,20 @@ export async function processInbound(
         },
       },
     ]);
+    await saveOutboundMessages(prisma, user.id, messages, cycle.id, context.now, inboundEventId);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
     };
   }
 
-  // Resolve active check-in
-  let activeCheckIn = await prisma.checkIn.findFirst({
-    where: { cycleId: cycle.id, status: { in: ["SENT", "SCHEDULED"] } },
-    orderBy: { scheduledAt: "desc" },
-  });
-
+  // activeCheckIn was resolved before perception — reuse it here.
   // Late reply: if there is no active check-in but the cycle is still active, accept the update
   // instead of starting a new check-in. This satisfies the "late answer" boundary item.
   if (
     !activeCheckIn &&
     cycle.status === "ACTIVE" &&
-    !["initiate", "consent", "skip", "confirm", "stop", "delete_data", "export_data", "help"].includes(perception.intent.primary)
+    !["initiate", "consent", "skip", "confirm", "stop", "delete_data", "export_data", "help", "question"].includes(perception.intent.primary)
   ) {
     const { messages, summary } = safetyWrapWithSummary(userId, [
       {
@@ -563,12 +618,16 @@ export async function processInbound(
   }
 
   // L4 Planner
+  const latestNarrative = await prisma.narrativeSummary.findFirst({
+    where: { cycleId: cycle.id },
+    orderBy: { generatedAt: "desc" },
+  });
   const plannerInput = {
     patientContext: {
       disease: cycle.disease,
       cycleId: cycle.id,
       cycleDay: Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24)),
-      narrativeSummary: "",
+      narrativeSummary: latestNarrative?.content ?? "",
       recentObservations,
       openIssues: [],
     },
@@ -621,6 +680,15 @@ export async function processInbound(
         completedAt: context.now,
       },
     });
+
+    // Generate session-level narrative summary (func-spec §5.3 step 3)
+    const narrativeClient = resolveLlmClient(context, "perception");
+    if (narrativeClient) {
+      const sessionObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn.sentAt ?? undefined);
+      await generateSessionNarrativeSummary(
+        prisma, user.id, cycle.id, activeCheckIn.id, sessionObservations, narrativeClient, context.now
+      );
+    }
 
     const allObservations = await prisma.observation.findMany({
       where: { cycleId: cycle.id },
@@ -714,12 +782,17 @@ export async function handleCheckInTrigger(
 
   const recentObservations = await getRecentObservations(prisma, cycle.userId, cycle.id, checkIn.sentAt ?? undefined);
 
+  const cycleNarrative = await prisma.narrativeSummary.findFirst({
+    where: { cycleId: cycle.id },
+    orderBy: { generatedAt: "desc" },
+  });
+
   const plannerInput = {
     patientContext: {
       disease: cycle.disease,
       cycleId: cycle.id,
       cycleDay: Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24)),
-      narrativeSummary: "",
+      narrativeSummary: cycleNarrative?.content ?? "",
       recentObservations,
       openIssues: [],
     },
