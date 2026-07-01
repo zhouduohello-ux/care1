@@ -56,6 +56,16 @@ async function main() {
   await app.register(helmet);
   await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
 
+  app.addHook("onSend", async (request, reply, payload) => {
+    if (process.env.ENABLE_TEST_TOOL === "true" && request.url.startsWith("/dev/test-tool")) {
+      reply.header(
+        "Content-Security-Policy",
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;"
+      );
+    }
+    return payload;
+  });
+
   app.setErrorHandler((error: Error & { statusCode?: number }, _request, reply) => {
     if (isProduction) {
       Sentry.captureException(error);
