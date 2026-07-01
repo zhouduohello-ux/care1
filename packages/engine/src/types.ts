@@ -29,6 +29,7 @@ export interface PerceptionContext {
 }
 
 export interface Observation {
+  id?: string;
   category: ObservationCategory;
   concept: string;
   value: unknown;

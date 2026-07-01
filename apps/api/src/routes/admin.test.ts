@@ -60,6 +60,7 @@ function makeClock(now: Date) {
     now: () => new Date(now.getTime()),
     advance: vi.fn(),
     setTime: vi.fn(),
+    resetUser: vi.fn(),
   };
 }
 

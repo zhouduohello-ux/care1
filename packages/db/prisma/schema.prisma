@@ -126,7 +126,7 @@ model Event {
   timestamp         DateTime  @default(now())
   type              EventType
   payload           Json
-  platformMessageId String?
+  platformMessageId String?   @unique
   traceId           String?
   idempotencyKey    String?   @unique
   llmModel          String?
@@ -137,7 +137,6 @@ model Event {
   @@index([userId, timestamp])
   @@index([cycleId, timestamp])
   @@index([type, timestamp])
-  @@index([platformMessageId])
   @@map("events")
 }
 

@@ -176,10 +176,10 @@ Current intent: ${input.conversationContext.currentIntent}`;
     { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
   ];
-  const content = await llmClient.complete(messages, { responseFormat: "json", temperature: 0.2 });
+  const { content, usage } = await llmClient.complete(messages, { responseFormat: "json", temperature: 0.2 });
 
   if (onLlmCall) {
-    await onLlmCall("planner", messages, content);
+    await onLlmCall(llmClient.modelName, messages, content, usage);
   }
 
   const parsed = JSON.parse(content) as PlannerOutput;

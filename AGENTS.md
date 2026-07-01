@@ -1,7 +1,7 @@
 # CareMemory — AI 编码代理须知
 
 > 本文件面向为本项目编写代码的 AI 代理。只保留与开发、运行、维护相关的信息。项目主要文档与注释使用中文，本文件亦使用中文撰写；代码、命令、文件路径、技术术语保持原样。
-> 最后更新：2026-06-29（基于实际项目结构与代码验证后重写）。
+> 最后更新：2026-06-30（重新验证项目结构，确认迁移数量与实际文件一致）。
 
 ---
 
@@ -94,7 +94,7 @@ CareMemory/
 
 - 已初始化 pnpm workspaces monorepo 与根目录配置；
 - 已选定技术栈：Node.js 22 LTS + TypeScript 5.7 + Fastify 5 + PostgreSQL 16 + Prisma 6 + Redis 7 + BullMQ 5 + Next.js 15 + Playwright 1.61；
-- 已创建 `packages/db` 与 Prisma schema（两次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`），本地基础设施（`infra/docker-compose.yml`）就绪；
+- 已创建 `packages/db` 与 Prisma schema（三次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`），本地基础设施（`infra/docker-compose.yml`）就绪；
 - 已实现 `apps/api`（Fastify 后端 + 引擎骨架 + 本地测试工具 + Brief API + GDPR 导出/删除 + admin/metrics），可本地跑通 onboarding → check-in → Disease Card → Brief / PDF 的最小闭环；
 - 已实现 `apps/web`（Next.js Disease Card / Brief / Records / Privacy Policy 页面，含 PDF 下载按钮），已配置 vitest + @testing-library/react + jsdom，并对 `BriefActions`、`DiseaseCardModule` 组件编写了单元测试；
 - 已实现 `packages/im-core`、`packages/im-whatsapp`、`packages/engine`、`packages/disease-card`、`packages/brief-templates`；
@@ -199,7 +199,7 @@ CareMemory/
   - 核心模型：User、Cycle、CheckIn、Event、Observation、NarrativeSummary、DiseaseCard、Brief；
   - Event 表同时承担审计日志角色（含 LLM 调用记录的 model/input/output/token usage 字段）；
   - 枚举：CycleType（TRIAL_7_DAY / PLAN_4_WEEK）、CycleStatus（ONBOARDING / ACTIVE / COMPLETED / CANCELLED）、CheckInStatus（SCHEDULED / SENT / COMPLETED / MISSED / EXCEPTION）、EventType（inbound_message / outbound_message / observation_extracted / state_updated / llm_call / safety_check / checkin_scheduled / checkin_sent / checkin_completed / user_action）、ObservationCategory（symptom / medication / trigger / function / adverse_event / subjective / question / system_intent / profile）、NarrativeScope（session / cycle / longitudinal）；
-  - 已有两次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`；
+  - 已有三次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`；
   - Prisma client 输出目录为 `packages/db/generated/client/`（已加入 `.gitignore`）；
 - `packages/engine`：六层引擎核心（对外导出 types + perceive / plan / safetyCheck / renderMessage + LLM/quota/experiments/memory 工具）；
   - `types.ts`：核心类型定义（EngineContext、PerceptionResult、PlannerInput/Output、SafetyResult、EngineTrace、Engine 接口等）；
@@ -522,4 +522,4 @@ LLM_TEMPERATURE_PLANNER=0.1
 
 ---
 
-*最后更新：2026-06-29（基于实际项目结构与代码验证后重写）。*
+*最后更新：2026-06-30（重新验证项目结构，确认迁移数量与实际文件一致）。*

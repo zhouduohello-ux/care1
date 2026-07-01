@@ -18,7 +18,8 @@ export async function saveInboundMessage(
   prisma: PrismaClient,
   userId: string,
   message: InboundMessage,
-  cycleId?: string
+  cycleId?: string,
+  traceId?: string
 ): Promise<string> {
   const event = await prisma.event.create({
     data: {
@@ -27,6 +28,7 @@ export async function saveInboundMessage(
       type: "inbound_message" as EventType,
       payload: message as unknown as Prisma.InputJsonValue,
       platformMessageId: message.messageId,
+      traceId,
       timestamp: message.timestamp,
     },
   });
@@ -39,7 +41,8 @@ export async function saveOutboundMessages(
   messages: OutboundMessage[],
   cycleId?: string,
   now: Date = new Date(),
-  salt?: string
+  salt?: string,
+  traceId?: string
 ): Promise<string[]> {
   const keys: string[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -57,7 +60,8 @@ export async function saveOutboundMessages(
           _deliveryStatus: "pending",
         } as unknown as Prisma.InputJsonValue,
         idempotencyKey,
-        timestamp: now,
+        traceId,
+        timestamp: new Date(now.getTime() + i),
       },
     });
     keys.push(idempotencyKey);
@@ -98,7 +102,8 @@ export async function savePerceptionEvent(
   prisma: PrismaClient,
   userId: string,
   cycleId: string | undefined,
-  perception: PerceptionResult
+  perception: PerceptionResult,
+  traceId?: string
 ): Promise<void> {
   await prisma.event.create({
     data: {
@@ -106,6 +111,7 @@ export async function savePerceptionEvent(
       cycleId,
       type: "observation_extracted" as EventType,
       payload: perception as unknown as Prisma.InputJsonValue,
+      traceId,
     },
   });
 }
@@ -114,7 +120,8 @@ export async function savePlannerEvent(
   prisma: PrismaClient,
   userId: string,
   cycleId: string | undefined,
-  plannerOutput: PlannerOutput
+  plannerOutput: PlannerOutput,
+  traceId?: string
 ): Promise<void> {
   await prisma.event.create({
     data: {
@@ -122,6 +129,7 @@ export async function savePlannerEvent(
       cycleId,
       type: "state_updated" as EventType,
       payload: plannerOutput as unknown as Prisma.InputJsonValue,
+      traceId,
     },
   });
 }
@@ -133,7 +141,8 @@ export async function saveLlmCallEvent(
   model: string,
   input: unknown,
   output: string,
-  tokenUsage?: { prompt?: number; completion?: number; total?: number }
+  tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number },
+  traceId?: string
 ): Promise<void> {
   await prisma.event.create({
     data: {
@@ -145,6 +154,7 @@ export async function saveLlmCallEvent(
       llmInput: input as unknown as Prisma.InputJsonValue,
       llmOutput: { output } as unknown as Prisma.InputJsonValue,
       tokenUsage: tokenUsage as unknown as Prisma.InputJsonValue,
+      traceId,
     },
   });
 }
@@ -184,7 +194,7 @@ Do not diagnose, do not give treatment advice, and do not use clinical scale sco
     { role: "user", content: userPrompt },
   ];
 
-  const content = await llmClient.complete(messages);
+  const { content } = await llmClient.complete(messages);
 
   await prisma.narrativeSummary.create({
     data: {
@@ -193,7 +203,7 @@ Do not diagnose, do not give treatment advice, and do not use clinical scale sco
       scope: "session",
       generatedAt: now,
       content,
-      keyObservationIds: observations.map((_, i) => `${i}`), // placeholder; real IDs not propagated here
+      keyObservationIds: observations.map((o) => o.id ?? ""),
     },
   });
 }

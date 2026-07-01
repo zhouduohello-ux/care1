@@ -6,7 +6,11 @@ export interface LLMMessage {
 }
 
 export interface LLMClient {
-  complete(messages: LLMMessage[], options?: { temperature?: number; responseFormat?: "json" }): Promise<string>;
+  modelName: string;
+  complete(
+    messages: LLMMessage[],
+    options?: { temperature?: number; responseFormat?: "json" }
+  ): Promise<{ content: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }>;
 }
 
 // ── Unified LLM Configuration ──────────────────────────────────────────
@@ -140,7 +144,11 @@ export function createOpenAIClient(config: OpenAIConfig): LLMClient {
   const fallbackModel = config.fallbackModel;
   const temperature = config.temperature ?? 0.3;
 
-  async function callModel(messages: LLMMessage[], options?: { temperature?: number; responseFormat?: "json" }, targetModel?: string): Promise<string> {
+  async function callModel(
+    messages: LLMMessage[],
+    options?: { temperature?: number; responseFormat?: "json" },
+    targetModel?: string
+  ): Promise<{ content: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
     const response = await fetch(`${baseUrl}/chat/completions`, {
       method: "POST",
       headers: {
@@ -162,13 +170,22 @@ export function createOpenAIClient(config: OpenAIConfig): LLMClient {
 
     const data = (await response.json()) as {
       choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
     };
     const msg = data.choices?.[0]?.message;
     const content = msg?.content || msg?.reasoning_content || "";
-    return content;
+    const usage = data.usage
+      ? {
+          promptTokens: data.usage.prompt_tokens ?? 0,
+          completionTokens: data.usage.completion_tokens ?? 0,
+          totalTokens: data.usage.total_tokens ?? 0,
+        }
+      : undefined;
+    return { content, usage };
   }
 
   return {
+    modelName: model,
     async complete(messages, options) {
       try {
         return await callModel(messages, options);
@@ -198,8 +215,9 @@ function isRetryableLlmError(error: unknown): boolean {
 
 export function createStubClient(response: string): LLMClient {
   return {
+    modelName: "stub",
     async complete() {
-      return response;
+      return { content: response };
     },
   };
 }

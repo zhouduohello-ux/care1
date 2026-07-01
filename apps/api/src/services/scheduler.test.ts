@@ -7,6 +7,7 @@ import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME } from "./schedul
 vi.mock("@carememory/engine", () => ({
   handleCheckInTrigger: vi.fn(async () => []),
   scheduleNextCheckInOffset: vi.fn((_userId: string, now: Date) => new Date(now.getTime() + 24 * 60 * 60 * 1000)),
+  loadLLMConfig: vi.fn(() => ({ enabled: false, chat: { apiKey: "", baseUrl: "", model: "" }, reason: { apiKey: "", baseUrl: "", model: "" }, layers: {} })),
 }));
 
 vi.mock("../lib/dispatch-outbound.js", () => ({
@@ -64,7 +65,7 @@ vi.mock("bullmq", () => ({
 }));
 
 function makeClock(now: Date) {
-  return { now: () => new Date(now.getTime()), advance: vi.fn(), setTime: vi.fn() };
+  return { now: () => new Date(now.getTime()), advance: vi.fn(), setTime: vi.fn(), resetUser: vi.fn() };
 }
 
 function makePrismaStub() {

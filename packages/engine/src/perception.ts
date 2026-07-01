@@ -8,7 +8,7 @@ import crypto from "node:crypto";
 const SYSTEM_COMMANDS = ["STOP", "HELP", "DELETE MY DATA", "EXPORT MY DATA", "AGREE", "SKIP", "OK"];
 
 export interface LlmAuditCallback {
-  (model: string, input: unknown, output: string, tokenUsage?: { prompt?: number; completion?: number; total?: number }): Promise<void> | void;
+  (model: string, input: unknown, output: string, tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }): Promise<void> | void;
 }
 
 export async function perceive(
@@ -66,6 +66,7 @@ export async function perceive(
   }
   if (upperText === "HELP") {
     result.intent = { primary: "help", confidence: 1.0 };
+    result.extractedObservations.push(makeObservation("system_intent", "help", {}));
     return result;
   }
   if (upperText === "CONTINUE") {
@@ -216,10 +217,10 @@ Do not diagnose or give treatment advice. Use concept names like "nighttime_symp
     { role: "system", content: systemPrompt },
     { role: "user", content: text },
   ];
-  const content = await llmClient.complete(messages, { responseFormat: "json", temperature: 0.2 });
+  const { content, usage } = await llmClient.complete(messages, { responseFormat: "json", temperature: 0.2 });
 
   if (onLlmCall) {
-    await onLlmCall("perception", messages, content);
+    await onLlmCall(llmClient.modelName, messages, content, usage);
   }
 
   const parsed = JSON.parse(content) as Partial<PerceptionResult>;

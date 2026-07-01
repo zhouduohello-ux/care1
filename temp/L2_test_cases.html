@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>L2 Memory 层集成测试报告</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f5f5; color: #333; line-height: 1.6; padding: 32px; }
+  .container { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 24px; margin-bottom: 8px; }
+  .meta { color: #666; font-size: 13px; margin-bottom: 24px; }
+  .summary { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 24px; box-shadow: 0 1px 3px rgba(0,0,0,.08); display: flex; gap: 32px; align-items: center; flex-wrap: wrap; }
+  .summary-stat { text-align: center; }
+  .summary-stat .num { font-size: 32px; font-weight: 700; }
+  .summary-stat .label { font-size: 13px; color: #666; }
+  .passed .num { color: #16a34a; }
+  .failed .num { color: #dc2626; }
+  .duration .num { color: #6b7280; }
+  .test-case { background: #fff; border-radius: 8px; padding: 20px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,.08); border-left: 4px solid #16a34a; }
+  .test-case.fail { border-left-color: #dc2626; }
+  .test-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; gap: 12px; }
+  .test-id { font-size: 14px; font-weight: 600; color: #6b7280; }
+  .test-name { font-size: 16px; font-weight: 600; }
+  .test-status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 12px; text-transform: uppercase; white-space: nowrap; }
+  .status-pass { background: #dcfce7; color: #16a34a; }
+  .status-fail { background: #fef2f2; color: #dc2626; }
+  .test-desc { font-size: 14px; color: #555; margin-bottom: 6px; }
+  .test-detail { font-size: 13px; color: #777; }
+  .test-detail code { background: #f3f4f6; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .section { margin-bottom: 8px; }
+  .section-title { font-size: 13px; font-weight: 600; color: #6b7280; margin-bottom: 4px; }
+  ul { list-style: none; padding: 0; }
+  ul li { font-size: 13px; color: #555; padding: 2px 0; }
+  ul li::before { content: "• "; color: #9ca3af; }
+  .error-msg { background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 10px 14px; font-family: monospace; font-size: 12px; color: #b91c1c; white-space: pre-wrap; word-break: break-all; margin-top: 8px; }
+  footer { margin-top: 32px; text-align: center; font-size: 12px; color: #9ca3af; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>L2 Memory 层集成测试报告</h1>
+<div class="meta">
+  运行时间: 2026-06-30 · 测试框架: vitest · 数据源: PostgreSQL + Prisma
+</div>
+
+<div class="summary">
+  <div class="summary-stat passed">
+    <div class="num">10</div>
+    <div class="label">✅ 通过</div>
+  </div>
+  <div class="summary-stat failed">
+    <div class="num">0</div>
+    <div class="label">❌ 失败</div>
+  </div>
+  <div class="summary-stat duration">
+    <div class="num">102ms</div>
+    <div class="label">⏱ 测试耗时</div>
+  </div>
+</div>
+
+<!-- TC1 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC1</div>
+      <div class="test-name">入站消息持久化</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>saveInboundMessage</code> 能正确写入 Event 表，且 platformMessageId 唯一约束生效</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li><code>event.type === "inbound_message"</code></li>
+      <li><code>event.userId / cycleId</code> 关联正确</li>
+      <li>重复 platformMessageId 抛出 DB 约束错误 (P2002)</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC2 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC2</div>
+      <div class="test-name">Observation 持久化 — 字段正确存储</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>saveObservations</code> 批量写入 observation 表，字段映射正确</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li>批量写入 2 条记录，返回 2 个 ID</li>
+      <li><code>userId / cycleId / eventId</code> 关联正确</li>
+      <li><code>category / concept / value / superseded</code> 字段值正确</li>
+      <li><code>confidence / extractedBy</code> 正确存储</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC3 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC3</div>
+      <div class="test-name">用户修正 — 旧 observation 标记 superseded=true</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>supersedePreviousObservations</code> 能将同 concept 的旧记录标记为被取代</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li>旧 observation 的 <code>superseded</code> 被设为 <code>true</code></li>
+      <li><code>supersededById</code> 指向新 ID</li>
+      <li>仅影响同 cycle、同 concept 的记录</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC4 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC4</div>
+      <div class="test-name">出站消息持久化 — idempotencyKey 生成 + timestamp 不重复</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>saveOutboundMessages</code> 为每条消息生成唯一 idempotencyKey，timestamp 递增避免唯一冲突</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li>每条消息有独立的 <code>idempotencyKey</code></li>
+      <li>不同消息的 key 互不相同</li>
+      <li>Event 表中 <code>idempotencyKey</code> 唯一约束通过（timestamp +i ms 偏移）</li>
+      <li>payload 包含 <code>_deliveryStatus: "pending"</code></li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC5 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC5</div>
+      <div class="test-name">查询近期 observations — 过滤 superseded + 按时间倒序</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>getRecentObservations</code> 返回当前 cycle 的非 superseded 记录，时间倒序</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li>返回数组类型正确</li>
+      <li>返回记录均为 <code>superseded=false</code>（与 DB 校验一致）</li>
+      <li>已被 supersede 的记录不出现在结果中</li>
+      <li>默认 limit=20 生效</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC6 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC6</div>
+      <div class="test-name">LLM 调用审计 — llmModel + tokenUsage 正确存储</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>saveLlmCallEvent</code> 将模型名写入 <code>llmModel</code> 字段，token 用量写入 <code>tokenUsage</code> JSON 字段</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li><code>llmModel === "gpt-4o-mini"</code></li>
+      <li><code>tokenUsage.promptTokens === 120</code></li>
+      <li><code>tokenUsage.totalTokens === 150</code></li>
+      <li><code>llmInput</code> 与 <code>llmOutput</code> 正确持久化</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC7 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC7</div>
+      <div class="test-name">感知结果事件持久化</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>savePerceptionEvent</code> 将 L1 感知结果写入 Event 表 (type: observation_extracted)</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li><code>type === "observation_extracted"</code></li>
+      <li><code>traceId</code> 匹配</li>
+      <li>payload 包含完整的 PerceptionResult</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC8 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC8</div>
+      <div class="test-name">规划结果事件持久化</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>savePlannerEvent</code> 将 L4 规划结果写入 Event 表 (type: state_updated)</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li><code>type === "state_updated"</code></li>
+      <li><code>traceId</code> 匹配</li>
+      <li>payload 包含 reasoning / sessionObjective / nextAction 等字段</li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC9 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC9</div>
+      <div class="test-name">GDPR 导出 — 包含 observations 和 events，默认排除 LLM 审计</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>exportUserData</code> 默认模式包含用户数据但过滤掉 llm_call 审计事件</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li><code>formatVersion === "carememory-gdpr-export-v1"</code></li>
+      <li><code>profile.id</code> 匹配用户</li>
+      <li><code>cycles / observations</code> 为数组且非空</li>
+      <li>顶层 events 不包含 <code>llm_call</code> 类型</li>
+      <li>每个 cycle 内部的 events 也不含 <code>llm_call</code></li>
+    </ul>
+  </div>
+</div>
+
+<!-- TC10 -->
+<div class="test-case">
+  <div class="test-header">
+    <div>
+      <div class="test-id">TC10</div>
+      <div class="test-name">GDPR 导出 — includeAudit=true 时包含 LLM 审计</div>
+    </div>
+    <span class="test-status status-pass">PASS</span>
+  </div>
+  <div class="test-desc">验证 <code>exportUserData(prisma, userId, { includeAudit: true })</code> 返回完整 LLM 调用记录</div>
+  <div class="section">
+    <div class="section-title">验证点</div>
+    <ul>
+      <li>顶层 events 包含 <code>llm_call</code> 类型事件</li>
+      <li><code>llm_call</code> 数量 &gt; 0</li>
+    </ul>
+  </div>
+</div>
+
+<footer>
+  CareMemory · L2 Memory 层集成测试 · 全部 10 个用例通过
+</footer>
+</div>
+</body>
+</html>

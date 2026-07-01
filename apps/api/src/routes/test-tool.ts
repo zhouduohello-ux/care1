@@ -68,10 +68,10 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
     });
   }
 
-  function engineContext(): EngineContext {
+  function engineContext(userId: string): EngineContext {
     return {
       prisma: fastify.prisma,
-      now: fastify.clock.now(),
+      now: fastify.clock.now(userId),
       createExportToken: createExportTokenFactory(fastify),
       webBaseUrl: process.env.API_BASE_URL ?? "http://localhost:3055",
       llmConfig: loadLLMConfig(),
@@ -84,7 +84,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
       channelId: userId,
       userId,
       messageId: `test_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      timestamp: fastify.clock.now(),
+      timestamp: fastify.clock.now(userId),
       content: {
         type: buttonId ? "button_reply" : "text",
         text: text ?? (buttonId ? "" : ""),
@@ -95,12 +95,12 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
   }
 
   async function simulateMessage(userId: string, text?: string, buttonId?: string) {
-    const result = await processInbound(engineContext(), buildInboundMessage(userId, text, buttonId));
+    const result = await processInbound(engineContext(userId), buildInboundMessage(userId, text, buttonId));
     return { outboundMessages: result.messages, trace: result.trace };
   }
 
   async function advanceTime(userId: string, to: string) {
-    const now = fastify.clock.now();
+    const now = fastify.clock.now(userId);
     let target = now;
 
     if (to === "next_day") {
@@ -121,14 +121,15 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
 
     const diff = target.getTime() - now.getTime();
     if (diff > 0) {
-      fastify.clock.advance(diff);
+      fastify.clock.advance(userId, diff);
     }
 
+    const newNow = fastify.clock.now(userId);
     const user = await fastify.prisma.user.findUnique({ where: { phoneNumber: userId } });
     const outboundMessages = [];
     if (user) {
       const cycles = await fastify.prisma.cycle.findMany({
-        where: { userId: user.id, status: "ACTIVE", nextCheckinAt: { lte: fastify.clock.now() } },
+        where: { userId: user.id, status: "ACTIVE", nextCheckinAt: { lte: newNow } },
       });
       for (const cycle of cycles) {
         // For the "force next check-in" dev action, mark any unanswered active check-in as missed
@@ -140,22 +141,22 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: fastify.clock.now(), llmConfig: loadLLMConfig() }, cycle.id);
+        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: newNow, llmConfig: loadLLMConfig() }, cycle.id);
         outboundMessages.push(...msgs);
 
         // If the engine did not schedule a next check-in (e.g. the cycle has no user bucket yet),
         // fall back to the standard offset.
         const refreshedCycle = await fastify.prisma.cycle.findUnique({ where: { id: cycle.id } });
-        if (refreshedCycle && (!refreshedCycle.nextCheckinAt || refreshedCycle.nextCheckinAt <= fastify.clock.now())) {
+        if (refreshedCycle && (!refreshedCycle.nextCheckinAt || refreshedCycle.nextCheckinAt <= newNow)) {
           await fastify.prisma.cycle.update({
             where: { id: cycle.id },
-            data: { nextCheckinAt: scheduleNextCheckInOffset(userId, fastify.clock.now()) },
+            data: { nextCheckinAt: scheduleNextCheckInOffset(userId, newNow) },
           });
         }
       }
     }
 
-    return { newTime: fastify.clock.now().toISOString(), outboundMessages };
+    return { newTime: newNow.toISOString(), outboundMessages };
   }
 
   fastify.post("/dev/test-tool/api/simulate-message", async (request: FastifyRequest<{ Body: { userId: string; text?: string; buttonId?: string } }>, reply) => {
@@ -247,7 +248,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
     if (!user) {
       return reply.code(404).send({ error: "User not found" });
     }
-    return reply.send({ exportedAt: fastify.clock.now().toISOString(), user });
+    return reply.send({ exportedAt: fastify.clock.now(userId).toISOString(), user });
   });
 
   fastify.post("/dev/test-tool/api/replay-session", async (request: FastifyRequest<{ Body: { userId: string; sessionJson: Record<string, unknown> } }>, reply) => {
@@ -276,6 +277,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
     if (user) {
       await deleteUserData(fastify.prisma, user.id);
     }
+    fastify.clock.resetUser(userId);
     return reply.send({ reset: true });
   });
 

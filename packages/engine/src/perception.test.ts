@@ -26,13 +26,15 @@ function ctx(opts: Partial<PerceptionContext> = {}): PerceptionContext {
 
 function mockLlm(json: Record<string, unknown>): LLMClient {
   return {
-    complete: vi.fn().mockResolvedValue(JSON.stringify(json)),
+    modelName: "mock",
+    complete: vi.fn().mockResolvedValue({ content: JSON.stringify(json) }),
   };
 }
 
 function mockLlmRaw(raw: string): LLMClient {
   return {
-    complete: vi.fn().mockResolvedValue(raw),
+    modelName: "mock",
+    complete: vi.fn().mockResolvedValue({ content: raw }),
   };
 }
 
@@ -135,9 +137,11 @@ describe("perceive — system commands", () => {
       expect(result.intent.primary).toBe("help");
     });
 
-    it("does not set extractedObservations for HELP", async () => {
+    it("sets extractedObservations for HELP", async () => {
       const result = await perceive(makeMessage("help"));
-      expect(result.extractedObservations).toEqual([]);
+      expect(result.extractedObservations).toEqual([
+        { category: "system_intent", concept: "help", value: {}, confidence: 1, extractedBy: "rule" },
+      ]);
     });
 
     it("detects Help mixed case", async () => {
@@ -883,7 +887,7 @@ describe("perceive — LLM path", () => {
     const onCall = vi.fn();
     await perceive(makeMessage("hello"), client, onCall);
     expect(onCall).toHaveBeenCalledTimes(1);
-    expect(onCall).toHaveBeenCalledWith("perception", expect.any(Array), expect.any(String));
+    expect(onCall).toHaveBeenCalledWith("mock", expect.any(Array), expect.any(String), undefined);
   });
 
   it("injects RAG sections into LLM prompt", async () => {
@@ -956,6 +960,7 @@ describe("perceive — LLM path", () => {
 
   it("falls back to rule when LLM throws", async () => {
     const client: LLMClient = {
+      modelName: "mock",
       complete: vi.fn().mockRejectedValue(new Error("LLM unavailable")),
     };
     const result = await perceive(makeMessage("I have a cough"), client);

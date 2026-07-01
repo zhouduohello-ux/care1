@@ -21,8 +21,8 @@ describe("LLM client", () => {
 
   it("calls OpenAI chat completions endpoint", async () => {
     const client = createOpenAIClient({ apiKey: "sk-test", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" });
-    const response = await client.complete([{ role: "user", content: "Hi" }]);
-    expect(response).toBe("Hello");
+    const { content } = await client.complete([{ role: "user", content: "Hi" }]);
+    expect(content).toBe("Hello");
     expect(fetch).toHaveBeenCalledTimes(1);
     const [url, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("https://api.openai.com/v1/chat/completions");
@@ -43,8 +43,8 @@ describe("LLM client", () => {
 
   it("stub client returns fixed response", async () => {
     const client = createStubClient('{"intent":{"primary":"answer"}}');
-    const response = await client.complete([]);
-    expect(response).toBe('{"intent":{"primary":"answer"}}');
+    const { content } = await client.complete([]);
+    expect(content).toBe('{"intent":{"primary":"answer"}}');
   });
 
   it("perceive uses LLM for free text when provided", async () => {

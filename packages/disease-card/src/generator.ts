@@ -4,7 +4,8 @@ import type { DiseaseCardModule, GeneratedDiseaseCard } from "./types.js";
 export function generateDiseaseCard(
   disease: string,
   observations: Observation[],
-  patientNickname?: string | null
+  patientNickname?: string | null,
+  previousVersion?: number
 ): GeneratedDiseaseCard {
   const modules: DiseaseCardModule[] = [];
 
@@ -136,7 +137,7 @@ export function generateDiseaseCard(
 
   return {
     disease,
-    version: 1,
+    version: (previousVersion ?? 0) + 1,
     modules,
     rawSummary,
   };

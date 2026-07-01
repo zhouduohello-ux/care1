@@ -97,7 +97,7 @@ export async function loadPersona(
     await prisma.user.delete({ where: { id: existing.id } });
   }
 
-  const now = clock.now();
+  const now = clock.now(phoneNumber);
   const nextVisitAt = persona.user.nextVisitDays
     ? new Date(now.getTime() + persona.user.nextVisitDays * 24 * 60 * 60 * 1000)
     : undefined;

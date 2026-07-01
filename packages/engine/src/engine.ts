@@ -163,7 +163,7 @@ export async function processInbound(
     model: string,
     input: unknown,
     output: string,
-    tokenUsage?: { prompt?: number; completion?: number; total?: number }
+    tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
   ) => {
     await saveLlmCallEvent(prisma, user?.id ?? userId, cycle?.id, model, input, output, tokenUsage);
     await incrementLlmQuota(context.quotaStore, user?.id ?? userId, context.now);
@@ -178,7 +178,7 @@ export async function processInbound(
       "RULE_FALLBACK",
       { reason: "daily_llm_quota_exceeded" },
       "Falling back to rule-based logic for today.",
-      { total: 0 }
+      { totalTokens: 0 }
     );
   }
 
@@ -296,7 +296,7 @@ export async function processInbound(
           },
         },
       ]);
-      await saveOutboundMessages(prisma, user.id, messages, recentCycle.id, context.now, inboundEventId);
+      await saveOutboundMessages(prisma, user.id, messages, recentCycle.id, new Date(), inboundEventId, perception.traceId);
       return {
         messages,
         trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -455,8 +455,8 @@ export async function processInbound(
   }
 
   // Persist inbound message
-  const inboundEventId = await saveInboundMessage(prisma, user.id, message, cycle.id);
-  await savePerceptionEvent(prisma, user.id, cycle.id, perception);
+  const inboundEventId = await saveInboundMessage(prisma, user.id, message, cycle.id, perception.traceId);
+  await savePerceptionEvent(prisma, user.id, cycle.id, perception, perception.traceId);
 
   // Handle onboarding
   if (cycle.status === "ONBOARDING") {
@@ -467,7 +467,10 @@ export async function processInbound(
       });
       const { messages } = askNext(userId, { ...user, consentGiven: true });
       const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
-      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, context.now, inboundEventId);
+      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId);
+      if (perception.extractedObservations.length > 0) {
+        await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
+      }
       return {
         messages: safeMessages,
         trace: { perception, planner: emptyPlannerOutput(safeMessages[0]?.content.text ?? ""), safety: summary },
@@ -481,7 +484,10 @@ export async function processInbound(
       if (getPendingOnboardingField(user)) {
         const { messages } = askNext(userId, user);
         const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
-        await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, context.now, inboundEventId);
+        await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId);
+        if (perception.extractedObservations.length > 0) {
+          await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
+        }
         return {
           messages: safeMessages,
           trace: { perception, planner: emptyPlannerOutput(safeMessages[0]?.content.text ?? ""), safety: summary },
@@ -494,7 +500,10 @@ export async function processInbound(
     if (pending) {
       const { messages } = await handleOnboardingInput(prisma, user, cycle, perception.rawText, context.now);
       const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
-      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, context.now, inboundEventId);
+      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId);
+      if (perception.extractedObservations.length > 0) {
+        await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
+      }
       return {
         messages: safeMessages,
         trace: { perception, planner: emptyPlannerOutput(safeMessages[0]?.content.text ?? ""), safety: summary },
@@ -502,6 +511,9 @@ export async function processInbound(
     }
 
     // Fallback: show consent prompt
+    if (perception.extractedObservations.length > 0) {
+      await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
+    }
     const { messages, summary } = safetyWrapWithSummary(userId, [
       {
         userId,
@@ -530,7 +542,10 @@ export async function processInbound(
         },
       },
     ]);
-    await saveOutboundMessages(prisma, user.id, messages, cycle.id, context.now, inboundEventId);
+    if (perception.extractedObservations.length > 0) {
+      await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
+    }
+    await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -555,7 +570,10 @@ export async function processInbound(
         },
       },
     ]);
-    await saveOutboundMessages(prisma, user.id, messages, cycle.id, context.now, inboundEventId);
+    if (perception.extractedObservations.length > 0) {
+      await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
+    }
+    await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -648,7 +666,7 @@ export async function processInbound(
   };
 
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
-  await savePlannerEvent(prisma, user.id, cycle.id, plannerOutput);
+  await savePlannerEvent(prisma, user.id, cycle.id, plannerOutput, perception.traceId);
 
   // L5 Dialogue
   const outbound = renderMessage(userId, plannerOutput);
@@ -669,7 +687,7 @@ export async function processInbound(
   }
 
   const { messages, summary } = safetyWrapWithSummary(userId, [outbound]);
-  await saveOutboundMessages(prisma, user.id, messages, cycle.id, context.now, inboundEventId);
+  await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
 
   // Generate Disease Card and schedule next check-in when session ends
   if (plannerOutput.nextAction.type === "end_session" && activeCheckIn) {
@@ -691,14 +709,19 @@ export async function processInbound(
     }
 
     const allObservations = await prisma.observation.findMany({
-      where: { cycleId: cycle.id },
+      where: { cycleId: cycle.id, superseded: false },
       orderBy: { timestamp: "asc" },
     });
 
-    const cardData = generateDiseaseCard(cycle.disease, allObservations, user.nickname);
+    const previousCard = await prisma.diseaseCard.findFirst({
+      where: { cycleId: cycle.id },
+      orderBy: { version: "desc" },
+      select: { version: true },
+    });
+    const cardData = generateDiseaseCard(cycle.disease, allObservations, user.nickname, previousCard?.version);
     const accessToken = crypto.randomBytes(32).toString("hex");
     const expiresAt = new Date(context.now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    await prisma.diseaseCard.create({
+    const diseaseCardRecord = await prisma.diseaseCard.create({
       data: {
         userId: user.id,
         cycleId: cycle.id,
@@ -711,6 +734,23 @@ export async function processInbound(
       },
     });
 
+    // Generate a Brief for this check-in session (30-day access token)
+    const briefAccessToken = crypto.randomBytes(32).toString("hex");
+    const briefExpiresAt = new Date(context.now.getTime() + 30 * 24 * 60 * 60 * 1000);
+    const brief = await prisma.brief.create({
+      data: {
+        cycleId: cycle.id,
+        diseaseCardId: diseaseCardRecord.id,
+        webUrl: "", // updated below once we have the id
+        accessToken: briefAccessToken,
+        expiresAt: briefExpiresAt,
+      },
+    });
+    await prisma.brief.update({
+      where: { id: brief.id },
+      data: { webUrl: `/b/${brief.id}?t=${briefAccessToken}` },
+    });
+
     // For 4-week plans that have reached ~28 days, prompt the user to continue rather than scheduling another check-in on this cycle.
     const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
     if (cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) {
@@ -721,6 +761,15 @@ export async function processInbound(
       if (messages[0]?.content.type === "text") {
         messages[0].content.text =
           "You've reached the end of your 4-week CareMemory plan. Reply CONTINUE to start your next 4-week cycle, or STOP to pause.";
+      }
+    } else if (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7) {
+      await prisma.cycle.update({
+        where: { id: cycle.id },
+        data: { status: "COMPLETED", endedAt: context.now },
+      });
+      if (messages[0]?.content.type === "text") {
+        messages[0].content.text =
+          "You've completed your 7-day trial. Your Disease Card and Brief are ready. Reply CONTINUE to start a 4-week plan, or STOP to pause.";
       }
     } else {
       // Schedule the next check-in based on the user's A/B bucket (48h vs 72h) at 10:00 local time
@@ -754,7 +803,7 @@ export async function handleCheckInTrigger(
     model: string,
     input: unknown,
     output: string,
-    tokenUsage?: { prompt?: number; completion?: number; total?: number }
+    tokenUsage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number }
   ) => {
     await saveLlmCallEvent(prisma, cycle.userId, cycle.id, model, input, output, tokenUsage);
     await incrementLlmQuota(context.quotaStore, cycle.userId, context.now);
@@ -770,17 +819,27 @@ export async function handleCheckInTrigger(
     return [];
   }
 
+  // Create check-in as SCHEDULED first, then update to SENT after messages are sent
   const checkIn = await prisma.checkIn.create({
     data: {
       cycleId: cycle.id,
       scheduledAt: context.now,
-      sentAt: context.now,
-      status: "SENT",
+      status: "SCHEDULED",
       budgetRemaining: 3,
     },
   });
+  await prisma.event.create({
+    data: {
+      userId: cycle.userId,
+      cycleId: cycle.id,
+      checkInId: checkIn.id,
+      type: "checkin_scheduled",
+      payload: { scheduledAt: context.now.toISOString() },
+      timestamp: context.now,
+    },
+  });
 
-  const recentObservations = await getRecentObservations(prisma, cycle.userId, cycle.id, checkIn.sentAt ?? undefined);
+  const recentObservations = await getRecentObservations(prisma, cycle.userId, cycle.id, checkIn.scheduledAt ?? undefined);
 
   const cycleNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
@@ -816,7 +875,23 @@ export async function handleCheckInTrigger(
 
   const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput);
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
-  await saveOutboundMessages(prisma, cycle.userId, messages, cycle.id, context.now, checkIn.id);
+  await saveOutboundMessages(prisma, cycle.userId, messages, cycle.id, new Date(), checkIn.id);
+
+  // Mark check-in as SENT now that messages have been sent
+  await prisma.checkIn.update({
+    where: { id: checkIn.id },
+    data: { status: "SENT", sentAt: context.now },
+  });
+  await prisma.event.create({
+    data: {
+      userId: cycle.userId,
+      cycleId: cycle.id,
+      checkInId: checkIn.id,
+      type: "checkin_sent",
+      payload: { sentAt: context.now.toISOString() },
+      timestamp: context.now,
+    },
+  });
 
   await prisma.checkIn.update({
     where: { id: checkIn.id },

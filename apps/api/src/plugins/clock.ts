@@ -2,9 +2,15 @@ import fp from "fastify-plugin";
 import type { FastifyInstance } from "fastify";
 
 export interface Clock {
-  now(): Date;
-  advance(ms: number): void;
-  setTime(date: Date): void;
+  /** Get the current time. Without userId, returns real wall-clock time.
+   *  With userId, returns the user's virtual time (if set), otherwise real time. */
+  now(userId?: string): Date;
+  /** Advance the virtual clock for a specific user. */
+  advance(userId: string, ms: number): void;
+  /** Set the virtual clock for a specific user to an absolute time. */
+  setTime(userId: string, date: Date): void;
+  /** Remove any per-user virtual clock override, reverting to real time. */
+  resetUser(userId: string): void;
 }
 
 class RealClock implements Clock {
@@ -13,25 +19,32 @@ class RealClock implements Clock {
   }
   advance(): void {}
   setTime(): void {}
+  resetUser(): void {}
 }
 
 class VirtualClock implements Clock {
-  private current: Date;
+  private userTimes = new Map<string, Date>();
 
-  constructor(initial = new Date()) {
-    this.current = new Date(initial.getTime());
+  now(userId?: string): Date {
+    if (userId) {
+      const t = this.userTimes.get(userId);
+      return t ? new Date(t.getTime()) : new Date();
+    }
+    // No userId → real time (used by scheduler, webhooks, etc.)
+    return new Date();
   }
 
-  now(): Date {
-    return new Date(this.current.getTime());
+  advance(userId: string, ms: number): void {
+    const current = this.userTimes.get(userId) ?? new Date();
+    this.userTimes.set(userId, new Date(current.getTime() + ms));
   }
 
-  advance(ms: number): void {
-    this.current = new Date(this.current.getTime() + ms);
+  setTime(userId: string, date: Date): void {
+    this.userTimes.set(userId, new Date(date.getTime()));
   }
 
-  setTime(date: Date): void {
-    this.current = new Date(date.getTime());
+  resetUser(userId: string): void {
+    this.userTimes.delete(userId);
   }
 }
 
@@ -42,7 +55,7 @@ export interface ClockPluginOptions {
 
 export default fp(async function clockPlugin(fastify: FastifyInstance, opts: ClockPluginOptions) {
   const clock: Clock = opts.virtual
-    ? new VirtualClock(opts.initialTime)
+    ? new VirtualClock()
     : new RealClock();
 
   fastify.decorate("clock", clock);

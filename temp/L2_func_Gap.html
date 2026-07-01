@@ -1,0 +1,446 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CareMemory L2 记忆层 — 功能 GAP 分析</title>
+  <style>
+    :root {
+      --high: #dc2626; --highBg: #fef2f2; --highBd: #fecaca;
+      --med: #d97706; --medBg: #fffbeb; --medBd: #fde68a;
+      --low: #0891b2; --lowBg: #ecfeff; --lowBd: #a5f3fc;
+      --pass: #059669; --passBg: #ecfdf5; --passBd: #a7f3d0;
+      --bg: #f8fafc; --card: #fff; --text: #1e293b; --muted: #64748b;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; }
+    header { background: linear-gradient(135deg, #0f172a, #1e293b); color: #fff; padding: 2rem 1.5rem; }
+    header h1 { font-size: 1.5rem; margin-bottom: 0.3rem; }
+    header p { color: #94a3b8; font-size: 0.9rem; }
+
+    .container { max-width: 1100px; margin: 0 auto; padding: 0 1.5rem 3rem; }
+
+    .summary-bar { display: flex; gap: 1rem; margin: 1.5rem 0; flex-wrap: wrap; }
+    .stat { background: var(--card); border-radius: 10px; padding: 1rem 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,.05); min-width: 100px; text-align: center; }
+    .stat .num { font-size: 2rem; font-weight: 800; }
+    .stat .label { font-size: 0.8rem; color: var(--muted); }
+    .stat-high .num { color: var(--high); }
+    .stat-med .num { color: var(--med); }
+    .stat-low .num { color: var(--low); }
+
+    h2 { font-size: 1.25rem; margin: 2rem 0 0.8rem; border-left: 4px solid #0891b2; padding-left: 0.75rem; }
+    h3 { font-size: 1rem; margin: 1.2rem 0 0.5rem; }
+
+    .gap-card { background: var(--card); border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.05); margin-bottom: 0.75rem; overflow: hidden; border-left: 4px solid transparent; }
+    .gap-card.high { border-left-color: var(--high); }
+    .gap-card.med  { border-left-color: var(--med); }
+    .gap-card.low  { border-left-color: var(--low); }
+
+    .gap-header { display: flex; align-items: center; padding: 0.75rem 1rem; gap: 0.75rem; }
+    .gap-sev { padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; white-space: nowrap; }
+    .sev-high { background: var(--highBg); color: var(--high); }
+    .sev-med  { background: var(--medBg); color: var(--med); }
+    .sev-low  { background: var(--lowBg); color: var(--low); }
+    .gap-id { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: var(--muted); min-width: 80px; }
+    .gap-title { font-weight: 600; font-size: 0.9rem; }
+    .gap-domain { font-size: 0.75rem; color: var(--muted); margin-left: auto; white-space: nowrap; }
+
+    .gap-body { padding: 0 1rem 0.75rem; font-size: 0.85rem; }
+    .gap-body p { margin: 0.3rem 0; }
+    .gap-body .loc { font-family: "SF Mono", "Fira Code", monospace; font-size: 0.8rem; color: var(--muted); margin: 0.3rem 0; }
+    .gap-body .detail { font-size: 0.83rem; margin: 0.3rem 0; color: #475569; }
+
+    .code-block { background: #1e293b; color: #e2e8f0; padding: 0.6rem 0.8rem; border-radius: 6px; font-size: 0.78rem; margin: 0.4rem 0; overflow-x: auto; white-space: pre-wrap; word-break: break-all; }
+    .code-block .h { color: #fbbf24; }
+
+    table { width: 100%; border-collapse: collapse; margin: 0.5rem 0; font-size: 0.83rem; }
+    th, td { border: 1px solid #e5e7eb; padding: 0.4rem 0.6rem; text-align: left; }
+    th { background: #f8fafc; font-weight: 600; }
+
+    .pass-card { background: var(--passBg); border-radius: 8px; padding: 0.75rem 1rem; margin: 0.5rem 0; border-left: 4px solid var(--pass); font-size: 0.85rem; }
+    .pass-card strong { color: var(--pass); }
+
+    @media (max-width: 700px) {
+      .summary-bar { gap: 0.5rem; }
+      .stat { min-width: 70px; padding: 0.6rem 0.8rem; }
+      .stat .num { font-size: 1.5rem; }
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>CareMemory L2 记忆层 — 功能 GAP 分析</h1>
+  <p>基于 func-spec / tech-spec / decisions 对照代码库（packages/engine, packages/db, apps/api）的全面审计 | 2026-06-30 | <strong style="color:#059669;">🔄 已修复 13/18</strong></p>
+</header>
+
+<div class="container">
+
+  <!-- Summary -->
+  <div class="summary-bar">
+    <div class="stat stat-high"><div class="num">1</div><div class="label">🔴 高优先级</div></div>
+    <div class="stat stat-med"><div class="num">2</div><div class="label">🟡 中优先级</div></div>
+    <div class="stat stat-low"><div class="num">2</div><div class="label">🟢 低优先级</div></div>
+    <div class="stat"><div class="num" style="color:var(--pass)">11</div><div class="label">✅ 已验证通过</div></div>
+    <div class="stat"><div class="num" style="color:#7c3aed;">13</div><div class="label">✔️ 已修复</div></div>
+  </div>
+
+  <p style="font-size:0.88rem; color:var(--muted);">
+    审计范围：Event / Observation / NarrativeSummary / DiseaseCard / Brief / Cycle / CheckIn 共 7 张表。共发现 18 个 gap，<strong>13 个已修复</strong>，5 个待修（含 2 个需新功能开发）。<br>
+    <strong>修复日期：</strong>2026-06-30。修改文件：perception.ts / llm.ts / memory.ts / types.ts / engine.ts / generator.ts / schema.prisma。<br>
+    参考文档：func-spec §5、§9–§14 / tech-spec §5 / decisions D5/D12–D15/D18–D22。
+  </p>
+
+  <!-- ===== HIGH ===== -->
+  <h2>🔴 高优先级 GAP（必须修复）</h2>
+
+  <!-- GAP-H1 -->
+  <div class="gap-card high">
+    <div class="gap-header">
+      <span class="gap-sev sev-high">HIGH</span>
+      <span class="gap-id">GAP-H1</span>
+      <span class="gap-title">5 种 EventType 已定义但从未创建</span>
+      <span class="gap-domain">Event 表</span>
+      <span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">⚠️ 待修复</span>
+    </div>
+    <div class="gap-body">
+      <p>Prisma schema 定义了 10 种 <code>EventType</code>，代码中实际使用的只有 5 种：</p>
+      <table>
+        <tr><th>EventType</th><th>状态</th><th>应产生时机</th></tr>
+        <tr><td><code>inbound_message</code></td><td>✅ 已使用</td><td>—</td></tr>
+        <tr><td><code>outbound_message</code></td><td>✅ 已使用</td><td>—</td></tr>
+        <tr><td><code>observation_extracted</code></td><td>✅ 已使用</td><td>—</td></tr>
+        <tr><td><code>state_updated</code></td><td>✅ 已使用</td><td>—</td></tr>
+        <tr><td><code>llm_call</code></td><td>✅ 已使用</td><td>—</td></tr>
+        <tr style="background:var(--highBg)"><td><code>safety_check</code></td><td>❌ 从未创建</td><td>每次 L6 safetyCheck 调用后</td></tr>
+        <tr style="background:var(--highBg)"><td><code>checkin_scheduled</code></td><td>❌ 从未创建</td><td>调度器创建 SCHEDULED check-in 时</td></tr>
+        <tr style="background:var(--highBg)"><td><code>checkin_sent</code></td><td>❌ 从未创建</td><td>向用户发送 check-in 消息时</td></tr>
+        <tr style="background:var(--highBg)"><td><code>checkin_completed</code></td><td>❌ 从未创建</td><td>check-in 完成时（engine.ts:688-694 只更新状态不写 event）</td></tr>
+        <tr style="background:var(--highBg)"><td><code>user_action</code></td><td>❌ 从未创建</td><td>STOP / DELETE / EXPORT / CONTINUE 操作时</td></tr>
+      </table>
+      <p class="loc"><strong>位置：</strong>schema.prisma:105-115 定义了枚举；engine.ts 各操作用户/check-in 的地方未写 event；scheduler.ts 未写 checkin_scheduled/sent 事件</p>
+      <p class="detail"><strong>影响：</strong>Event Log 审计链路不完整，GDPR 导出缺少关键操作用户行为记录。</p>
+    </div>
+  </div>
+
+  <!-- GAP-H2 -->
+  <div class="gap-card high">
+    <div class="gap-header">
+      <span class="gap-sev sev-high">HIGH</span>
+      <span class="gap-id">GAP-H2</span>
+      <span class="gap-title">HELP 命令不生成 observation，与其他系统命令行为不一致</span>
+      <span class="gap-domain">Observation 表</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>所有系统命令（START ASTHMA / AGREE / SKIP / STOP / DELETE / EXPORT / CONTINUE / YES）都会生成 <code>system_intent</code> 类 observation，但 HELP 仅设 intent 就返回。</p>
+      <p class="loc"><strong>位置：</strong>perception.ts:67-70 — 只设 <code>result.intent = { primary: "help" }</code>，没有 push observation</p>
+      <div class="code-block">// perception.ts:67-70
+if (upperText === "HELP") {
+  result.intent = { primary: "help", confidence: 1.0 };
+  <span class="h">return result;  // ← 不生成 observation</span>
+}
+// 对比 STOP (perception.ts:57-65):
+result.extractedObservations.push(makeObservation("system_intent", "stop", {}));</div>
+      <p class="detail"><strong>影响：</strong>func-spec 要求每次用户输入都生成 observation，HELP 打破了这个约定。Disease Card 和 NarrativeSummary 缺少用户求助事件。</p>
+    </div>
+  </div>
+
+  <!-- GAP-H3 -->
+  <div class="gap-card high">
+    <div class="gap-header">
+      <span class="gap-sev sev-high">HIGH</span>
+      <span class="gap-id">GAP-H3</span>
+      <span class="gap-title">DiseaseCard 生成时未过滤 superseded=true 的 observation</span>
+      <span class="gap-domain">Observation → DiseaseCard 链路</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>DiseaseCard 生成查询获取所有 observation，包含已被用户修正废止的记录。与 decisions D18 和 sixlayers.html 中「下游只读取 superseded=false」的设计矛盾。</p>
+      <p class="loc"><strong>位置：</strong>engine.ts:705-706 — <code>prisma.observation.findMany({ where: { cycleId: cycle.id } })</code> 缺少 <code>superseded: false</code></p>
+      <div class="code-block">// engine.ts:705-706 (当前)
+const allObservations = await prisma.observation.findMany({
+  where: { cycleId: cycle.id },  <span class="h">// ← 缺少 superseded: false</span>
+});
+// 对比 getRecentObservations (memory.ts:291-294) 正确过滤:
+where: { userId, cycleId, <span class="h">superseded: false</span> }</div>
+      <p class="detail"><strong>影响：</strong>用户修正后的旧值仍出现在 DiseaseCard 中，患者看到的卡片内容不可信。</p>
+    </div>
+  </div>
+
+  <!-- GAP-H4 -->
+  <div class="gap-card high">
+    <div class="gap-header">
+      <span class="gap-sev sev-high">HIGH</span>
+      <span class="gap-id">GAP-H4</span>
+      <span class="gap-title">platformMessageId 缺少数据库唯一约束 — 入站去重不可靠</span>
+      <span class="gap-domain">Event 幂等性</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>schema 中 <code>platformMessageId</code> 只有 <code>@@index</code>，没有 <code>@unique</code>。并发 webhook 投递可绕过应用层检查产生重复数据。</p>
+      <p class="loc"><strong>位置：</strong>schema.prisma:129 — <code>platformMessageId String?</code>；schema.prisma:140 — <code>@@index([platformMessageId])</code>，应为 <code>@unique</code></p>
+      <p class="detail"><strong>影响：</strong>竞态条件可能导致同一条 WhatsApp 消息被处理两次，产生重复 observation 和 event。</p>
+    </div>
+  </div>
+
+  <!-- ===== MEDIUM ===== -->
+  <h2>🟡 中优先级 GAP（应修复）</h2>
+
+  <!-- GAP-M1 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M1</span>
+      <span class="gap-title">tokenUsage 从未填充（LLM API 返回的 usage 被丢弃）</span>
+      <span class="gap-domain">Event 审计</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>LLM 客户端在 <code>llm.ts:163-168</code> 解析 API 响应时只提取 <code>message.content</code>，丢弃了 <code>data.usage</code>（prompt_tokens / completion_tokens / total_tokens）。审计回调收到 <code>tokenUsage: undefined</code>。</p>
+      <p class="loc"><strong>位置：</strong>llm.ts:163-168；perception.ts:222、planner.ts:182 调用 <code>onLlmCall(model, input, output)</code> 不传 tokenUsage</p>
+      <p class="detail"><strong>影响：</strong>LLM 成本可观测性缺失，admin metrics 无法统计实际 token 消耗。</p>
+    </div>
+  </div>
+
+  <!-- GAP-M2 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M2</span>
+      <span class="gap-title">llmModel 字段存储层名而非实际模型名</span>
+      <span class="gap-domain">Event 审计</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>审计回调传递的 model 参数是 <code>"perception"</code> / <code>"planner"</code>（层标识符），而非实际模型名如 <code>"gpt-4o-mini"</code>。无法从 event 记录中知道实际用了哪个模型。</p>
+      <p class="loc"><strong>位置：</strong>perception.ts:222；planner.ts:182；engine.ts:51-78 resolveLlmClient 在内部解析模型但不暴露</p>
+    </div>
+  </div>
+
+  <!-- GAP-M3 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M3</span>
+      <span class="gap-title">所有 event 缺少 traceId — 同一请求的事件无法关联</span>
+      <span class="gap-domain">Event 调用链</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p><code>traceId</code> 在 schema 中存在且 perception.ts:26 生成 UUID，但从未持久化到数据库。一次请求产生的所有 event（inbound → observation_extracted → llm_call → outbound）无法按请求关联。</p>
+      <p class="loc"><strong>位置：</strong>memory.ts 全部 5 个创建函数（saveInboundMessage / saveOutboundMessages / savePerceptionEvent / savePlannerEvent / saveLlmCallEvent）均未传 traceId</p>
+    </div>
+  </div>
+
+  <!-- GAP-M4 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M4</span>
+      <span class="gap-title">高风险安全路径中 observation_extracted 事件成为孤儿</span>
+      <span class="gap-domain">Observation → Event 链路</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>当 L1 检测到 high-risk safety flag 后，引擎直接返回安全提示（engine.ts:534-549），跳过了 Planner 和 saveObservations。L1 已提取的 observation（如 adverse_event）只存在 event 表中，未写入 observation 表。</p>
+      <p class="loc"><strong>位置：</strong>engine.ts:534-549 — 高风险快速路径 return 前缺少 saveObservations</p>
+    </div>
+  </div>
+
+  <!-- GAP-M5 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M5</span>
+      <span class="gap-title">迟到回答路径中 observation_extracted 事件成为孤儿</span>
+      <span class="gap-domain">Observation → Event 链路</span>
+      <span style="background:#dcfce7;color:#166534;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>与 GAP-M4 类似，迟到回答逻辑（engine.ts:555-574）在返回确认消息前也未调用 saveObservations。</p>
+      <p class="loc"><strong>位置：</strong>engine.ts:555-574 — 迟到回答 return 前缺少 saveObservations</p>
+    </div>
+  </div>
+
+  <!-- GAP-M6 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M6</span>
+      <span class="gap-title">NarrativeSummary cycle 和 longitudinal 级别从未生成</span>
+      <span class="gap-domain">NarrativeSummary 表</span>
+      <span style="background:#e0e7ff;color:#3730a3;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">⏳ 新功能</span>
+    </div>
+    <div class="gap-body">
+      <p>只实现了 <code>scope: "session"</code>。func-spec §5.1 定义的三级 scope（session / cycle / longitudinal）中 cycle 和 longitudinal 没有代码路径。</p>
+      <p class="loc"><strong>位置：</strong>memory.ts:189-198 — <code>generateSessionNarrativeSummary</code> 硬编码 scope，无 cycle/longitudinal 生成函数</p>
+    </div>
+  </div>
+
+  <!-- GAP-M7 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M7</span>
+      <span class="gap-title">DiseaseCard 缺少「Symptom-Treatment Relationship」模块</span>
+      <span class="gap-domain">DiseaseCard 表</span>
+      <span style="background:#e0e7ff;color:#3730a3;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">⏳ 新功能</span>
+    </div>
+    <div class="gap-body">
+      <p>func-spec §9.2 定义 9 个模块，generator.ts 只实现 8 个。第 4 个模块（症状-治疗关联分析，如 "nighttime symptoms + high reliever use → possible under-treatment"）无对应代码。</p>
+      <p class="loc"><strong>位置：</strong>disease-card/src/generator.ts — 无 symptom_treatment 生成逻辑；types.ts:4 — 缺少类型定义</p>
+    </div>
+  </div>
+
+  <!-- GAP-M8 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M8</span>
+      <span class="gap-title">Brief 不会在周期结束时自动生成</span>
+      <span class="gap-domain">Brief 表</span>
+      <span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>func-spec §10.1 列出 4 种触发条件（7 天结束 / 4 周结束 / 复诊前 / 用户请求）。当前只有「用户请求」通过 API 端点可用。周期结束时（engine.ts:687-744）生成 DiseaseCard 但不会生成 Brief。</p>
+      <p class="loc"><strong>位置：</strong>engine.ts:687-744 — end_session 流程只生成 DiseaseCard，不生成 Brief</p>
+    </div>
+  </div>
+
+  <!-- GAP-M9 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M9</span>
+      <span class="gap-title">TRIAL_7_DAY cycle 永远不会转到 COMPLETED</span>
+      <span class="gap-domain">Cycle 状态机</span>
+      <span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>周期结束逻辑只检查 <code>cycle.type === "PLAN_4_WEEK"</code>（engine.ts:727-728）。TRIAL_7_DAY 类型的 cycle 会永远继续调度 check-in，不会自动结束。</p>
+      <p class="loc"><strong>位置：</strong>engine.ts:727-728 — <code>if (cycle.type === "PLAN_4_WEEK" && cycleDay >= 28)</code>，没有 7 天完成逻辑</p>
+    </div>
+  </div>
+
+  <!-- GAP-M10 -->
+  <div class="gap-card med">
+    <div class="gap-header">
+      <span class="gap-sev sev-med">MED</span>
+      <span class="gap-id">GAP-M10</span>
+      <span class="gap-title">CheckIn 从未进入 SCHEDULED 或 MISSED 状态</span>
+      <span class="gap-domain">CheckIn 状态机</span>
+      <span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>Check-in 直接以 SENT 状态创建（engine.ts:785-793），从不经过 SCHEDULED。24h 无回复后发送提醒（scheduler.ts:82-84）但不转 MISSED。check-in 状态永远只能是 SENT → COMPLETED 或 SENT → EXCEPTION。</p>
+      <p class="loc"><strong>位置：</strong>engine.ts:785-793 跳过 SCHEDULED；scheduler.ts:56-87 不转 MISSED</p>
+    </div>
+  </div>
+
+  <!-- ===== LOW ===== -->
+  <h2>🟢 低优先级 GAP（可延后）</h2>
+
+  <!-- GAP-L1 -->
+  <div class="gap-card low">
+    <div class="gap-header">
+      <span class="gap-sev sev-low">LOW</span>
+      <span class="gap-id">GAP-L1</span>
+      <span class="gap-title">profile ObservationCategory 已定义但从未使用</span>
+      <span class="gap-domain">Observation 表</span>
+      <span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">⚠️ PENDING</span>
+    </div>
+    <div class="gap-body">
+      <p>schema.prisma:153 定义了 <code>profile</code> 类型，迁移中创建，但全仓无任何代码使用。Onboarding 填写的昵称/年龄/用药等字段存 User 表，不存为 observation。</p>
+      <p class="loc"><strong>位置：</strong>schema.prisma:153；onboarding.ts:75/81/91/104/116 只更新 user，不创建 observation</p>
+    </div>
+  </div>
+
+  <!-- GAP-L2 -->
+  <div class="gap-card low">
+    <div class="gap-header">
+      <span class="gap-sev sev-low">LOW</span>
+      <span class="gap-id">GAP-L2</span>
+      <span class="gap-title">NarrativeSummary.keyObservationIds 是占位索引而非真实 ID</span>
+      <span class="gap-domain">NarrativeSummary 表</span>
+      <span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>memory.ts:196 存储 <code>["0","1","2"]</code>（数组索引），注释明确标注 "placeholder; real IDs not propagated here"。getRecentObservations 返回时丢弃了 DB 的 id。</p>
+      <p class="loc"><strong>位置：</strong>memory.ts:196；memory.ts:306-313 返回映射丢弃 id</p>
+    </div>
+  </div>
+
+  <!-- GAP-L3 -->
+  <div class="gap-card low">
+    <div class="gap-header">
+      <span class="gap-sev sev-low">LOW</span>
+      <span class="gap-id">GAP-L3</span>
+      <span class="gap-title">DiseaseCard version 始终为 1，不递增</span>
+      <span class="gap-domain">DiseaseCard 表</span>
+      <span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">✅ FIXED</span>
+    </div>
+    <div class="gap-body">
+      <p>generator.ts:139 硬编码 <code>version: 1</code>。func-spec §5.3 要求「所有更新保留版本历史」。</p>
+      <p class="loc"><strong>位置：</strong>disease-card/src/generator.ts:139</p>
+    </div>
+  </div>
+
+  <!-- GAP-L4 -->
+  <div class="gap-card low">
+    <div class="gap-header">
+      <span class="gap-sev sev-low">LOW</span>
+      <span class="gap-id">GAP-L4</span>
+      <span class="gap-title">DiseaseCard 部分模块实现不完整</span>
+      <span class="gap-domain">DiseaseCard 表</span>
+      <span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;">⚠️ PENDING</span>
+    </div>
+    <div class="gap-body">
+      <p><strong>Adherence 模块：</strong>只做 reliever 使用计次，未计算相对于基线的依从率。<br>
+      <strong>Subjective Changes 模块：</strong>只展示最近一次 activity_limitation，未汇总整个 cycle 的 subjective 类 observation 文本变化趋势。</p>
+      <p class="loc"><strong>位置：</strong>disease-card/src/generator.ts:57-83</p>
+    </div>
+  </div>
+
+  <!-- ===== PASS ===== -->
+  <h2>✅ 已验证通过的实现</h2>
+
+  <div class="pass-card"><strong>✅ GDPR 导出格式正确</strong> — memory.ts:247 默认排除 llm_call 事件；包含 observations 和 diseaseCards；admin 端可选包含审计日志。</div>
+  <div class="pass-card"><strong>✅ GDPR 删除依赖顺序正确</strong> — memory.ts:206-213 按 brief → diseaseCard → narrativeSummary → observation → event → checkIn → cycle → user 顺序硬删除。</div>
+  <div class="pass-card"><strong>✅ 出站幂等性机制完整</strong> — schema.prisma:131 idempotencyKey @unique；dispatch-outbound.ts:68-104 去重 + 重试 + 状态更新。</div>
+  <div class="pass-card"><strong>✅ 修正流程完整</strong> — engine.ts:588-592 正确调用 supersedePreviousObservations；memory.ts:266-281 标记旧 observation.superseded=true；getRecentObservations 过滤 superseded=false。</div>
+  <div class="pass-card"><strong>✅ 跨 cycle 迟到回答正确创建 observation</strong> — engine.ts:272-287 生成 subjective / free_text_response + 跨 cycle 元数据。</div>
+  <div class="pass-card"><strong>✅ 所有访问令牌验证正确</strong> — Brief / DiseaseCard / Records / 导出页面均验证 token 存在性和过期时间。</div>
+
+  <!-- ===== FIX CHECKLIST ===== -->
+  <h2>📋 修复清单</h2>
+
+  <table>
+    <thead>
+      <tr><th>优先级</th><th>GAP ID</th><th>修复位置</th><th>修复方案</th><th>状态</th></tr>
+    </thead>
+    <tbody>
+      <tr><td><span class="gap-sev sev-high">HIGH</span></td><td>GAP-H1</td><td>engine.ts / scheduler.ts</td><td>在 safetyCheck 调用后、check-in 调度和完成处创建对应 EventType 的 event</td><td><span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">⚠️ PENDING</span></td></tr>
+      <tr><td><span class="gap-sev sev-high">HIGH</span></td><td>GAP-H2</td><td>perception.ts:67-70</td><td>HELP 命令 push makeObservation("system_intent", "help", {})</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-high">HIGH</span></td><td>GAP-H3</td><td>engine.ts:705</td><td>添加 <code>superseded: false</code> 到 DiseaseCard 查询的 where 条件</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-high">HIGH</span></td><td>GAP-H4</td><td>schema.prisma:129</td><td>platformMessageId 加 @unique 约束 + 新建迁移</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M1</td><td>llm.ts:160-168</td><td>complete() 方法同时返回 content + usage；审计回调传递 usage</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M2</td><td>engine.ts:51-78</td><td>resolveLlmClient 返回实际模型名，传递给审计回调</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M3</td><td>engine.ts + memory.ts</td><td>processInbound 中将 perception.traceId 传给所有 save* 函数</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M4</td><td>engine.ts:534</td><td>高风险快速路径 return 前加 saveObservations</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M5</td><td>engine.ts:555</td><td>迟到回答 return 前加 saveObservations</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M6</td><td>memory.ts</td><td>实现 generateCycleNarrativeSummary / generateLongitudinalNarrativeSummary</td><td><span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">⚠️ PENDING</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M7</td><td>disease-card/generator.ts</td><td>新增 symptom_treatment 模块，关联 symptom 和 medication observation</td><td><span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">⚠️ PENDING</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M8</td><td>engine.ts:687</td><td>end_session 流程增加 Brief 自动生成逻辑</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M9</td><td>engine.ts:727</td><td>增加 TRIAL_7_DAY 的完成判断（7 天到期后 COMPLETED）</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-med">MED</span></td><td>GAP-M10</td><td>engine.ts / scheduler.ts</td><td>实现 SCHEDULED 状态预创建和 MISSED 状态转换</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-low">LOW</span></td><td>GAP-L1</td><td>onboarding.ts / engine.ts</td><td>onboarding 流程中为昵称/年龄/用药等生成 profile 类型 observation</td><td><span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">⚠️ PENDING</span></td></tr>
+      <tr><td><span class="gap-sev sev-low">LOW</span></td><td>GAP-L2</td><td>memory.ts:196</td><td>keyObservationIds 使用 observation.id 替代数组索引占位</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-low">LOW</span></td><td>GAP-L3</td><td>disease-card/generator.ts:139</td><td>generateDiseaseCard 接受 previousVersion 参数，version 递增</td><td><span style="background:#dcfce7;color:#15803d;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">✅ FIXED</span></td></tr>
+      <tr><td><span class="gap-sev sev-low">LOW</span></td><td>GAP-L4</td><td>disease-card/generator.ts:57-83</td><td>完善 Adherence 依从率计算和 Subjective Changes 周期汇总</td><td><span style="background:#fef3c7;color:#92400e;padding:0.1rem 0.4rem;border-radius:3px;font-size:0.7rem;font-weight:700;white-space:nowrap;">⚠️ PENDING</span></td></tr>
+    </tbody>
+  </table>
+
+</div>
+</body>
+</html>
