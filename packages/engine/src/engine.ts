@@ -19,6 +19,7 @@ import {
   recordReprompt,
   clearPendingQuestion,
   setPendingQuestion,
+  getMaxReprompts,
   MAX_REPROMPTS,
   type PendingQuestion,
 } from "./turn-manager.js";
@@ -656,7 +657,7 @@ export async function processInbound(
     if (pending && !isAnswerToPendingQuestion(message, perception, pending, user.locale)) {
       const nextRepromptCount = repromptCount + 1;
 
-      if (nextRepromptCount > MAX_REPROMPTS) {
+      if (nextRepromptCount > getMaxReprompts()) {
         // Too many failed attempts: record a no-answer observation so the planner skips this topic,
         // then continue to the planner as usual.
         await saveObservations(

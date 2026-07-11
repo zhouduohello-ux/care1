@@ -19,8 +19,27 @@ export interface TurnState {
   repromptCount: number;
 }
 
-/** Maximum number of reprompts before the system gives up and moves on. */
-export const MAX_REPROMPTS = 2;
+/** Default maximum number of reprompts before the system gives up and moves on. */
+export const DEFAULT_MAX_REPROMPTS = 2;
+
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    console.warn(`[turn-manager] Invalid ${name}="${raw}"; using fallback ${fallback}`);
+    return fallback;
+  }
+  return parsed;
+}
+
+/** Maximum number of reprompts; configurable via PENDING_QUESTION_MAX_REPROMPTS. */
+export function getMaxReprompts(): number {
+  return parseIntEnv("PENDING_QUESTION_MAX_REPROMPTS", DEFAULT_MAX_REPROMPTS);
+}
+
+/** @deprecated Use {@link getMaxReprompts} instead. */
+export const MAX_REPROMPTS = DEFAULT_MAX_REPROMPTS;
 
 export function pendingQuestionFromPlannerOutput(output: PlannerOutput): PendingQuestion | undefined {
   const action = output.nextAction;
