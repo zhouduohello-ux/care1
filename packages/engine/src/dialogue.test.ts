@@ -298,6 +298,26 @@ describe("renderMessage", async () => {
       expect(message.content.list?.[0].title.length).toBeLessThanOrEqual(10);
       expect(message.content.list?.[0].title.endsWith("…")).toBe(true);
     });
+
+    it("truncates template body to capability maxBodyLength", async () => {
+      const longPurpose = "a".repeat(2000);
+      const resolver = {
+        resolve: vi.fn((message: OutboundMessage) => ({
+          templateKey: "plain_text",
+          templateVariables: { body: message.content.text },
+        })),
+      };
+      const output = makePlannerOutput({ type: "end_session", purpose: longPurpose });
+      const message = await renderMessage("user_1", output, {
+        capability: customCapability({ maxBodyLength: 100, supportsTemplates: true }),
+        outOfSession: true,
+        templateResolver: resolver,
+      });
+
+      expect(message.content.type).toBe("template");
+      expect(message.content.text.length).toBeLessThanOrEqual(100);
+      expect(message.content.templateVariables?.body.length).toBeLessThanOrEqual(100);
+    });
   });
 
   describe("conversation style", async () => {
@@ -493,7 +513,7 @@ describe("renderMessage", async () => {
   describe("out-of-session template conversion", async () => {
     const mockResolver = {
       resolve: vi.fn((message: OutboundMessage) => ({
-        templateName: "carememory_plain_text",
+        templateKey: "plain_text",
         templateVariables: { body: message.content.text },
       })),
     };
@@ -506,7 +526,7 @@ describe("renderMessage", async () => {
       });
 
       expect(message.content.type).toBe("template");
-      expect(message.content.templateName).toBe("carememory_plain_text");
+      expect(message.content.templateKey).toBe("plain_text");
       expect(message.conversationContext.requiresSession).toBe(false);
     });
 

@@ -55,7 +55,7 @@ export async function dispatchOutboundMessages(
         content: {
           type: "template",
           text: message.content.text,
-          templateName: template.name,
+          templateKey,
           templateVariables,
         },
       };

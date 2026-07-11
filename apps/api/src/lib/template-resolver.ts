@@ -16,7 +16,7 @@ export const whatsappTemplateResolver: TemplateResolver = {
     });
 
     return {
-      templateName: template.name,
+      templateKey,
       templateVariables: variables,
     };
   },

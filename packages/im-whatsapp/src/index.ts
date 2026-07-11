@@ -7,6 +7,7 @@ import {
   type PlatformCapability,
   DEFAULT_PLATFORM_CAPABILITIES,
 } from "@carememory/im-core";
+import { WHATSAPP_TEMPLATES } from "./templates.js";
 import { WhatsAppSender } from "./sender.js";
 
 export { WhatsAppSender };
@@ -73,13 +74,15 @@ export class WhatsAppAdapter implements IMAdapter {
 
   buildPayload(message: OutboundMessage): unknown {
     if (message.content.type === "template") {
+      const templateKey = message.content.templateKey ?? "plain_text";
+      const template = WHATSAPP_TEMPLATES[templateKey] ?? WHATSAPP_TEMPLATES["plain_text"];
       return {
         messaging_product: "whatsapp",
         recipient_type: "individual",
         to: message.userId,
         type: "template",
         template: {
-          name: message.content.templateName,
+          name: template.name,
           language: { code: "en_GB" },
           components: this.buildTemplateComponents(message.content.templateVariables),
         },

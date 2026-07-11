@@ -26,7 +26,7 @@ export interface TemplateResolver {
   resolve(
     message: OutboundMessage,
     context: TemplateContext
-  ): { templateName: string; templateVariables: Record<string, string> };
+  ): { templateKey: string; templateVariables: Record<string, string> };
 }
 
 export interface RenderOptions {
@@ -55,18 +55,15 @@ export async function renderMessage(
   const locale = getLocale(options.locale);
 
   if (action.type === "safety_response") {
-    const polished = await polishIfEnabled(
-      {
-        userId,
-        conversationContext: { requiresSession: true, priority: "urgent" },
-        content: {
-          type: "text",
-          text: styleText(action.purpose, options.style ?? "v1", "safety", locale),
-        },
+    // Safety responses bypass LLM polish to guarantee exact wording and fast path.
+    return {
+      userId,
+      conversationContext: { requiresSession: true, priority: "urgent" },
+      content: {
+        type: "text",
+        text: styleText(action.purpose, options.style ?? "v1", "safety", locale),
       },
-      { intent: "safety", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
-    );
-    return applyTemplateIfNeeded(polished, capability, options, locale);
+    };
   }
 
   if (action.type === "end_session") {
@@ -339,12 +336,12 @@ function applyTemplateIfNeeded(
     return message;
   }
 
-  const bodyText = serializeContentToText(message);
+  const bodyText = truncateBody(serializeContentToText(message), capability.maxBodyLength);
   const textMessage: OutboundMessage = {
     ...message,
     content: { type: "text", text: bodyText },
   };
-  const { templateName, templateVariables } = options.templateResolver.resolve(textMessage, options.templateContext ?? {});
+  const { templateKey, templateVariables } = options.templateResolver.resolve(textMessage, options.templateContext ?? {});
 
   return {
     ...message,
@@ -352,10 +349,15 @@ function applyTemplateIfNeeded(
     content: {
       type: "template",
       text: bodyText,
-      templateName,
+      templateKey,
       templateVariables,
     },
   };
+}
+
+function truncateBody(text: string, maxLength?: number): string {
+  if (!maxLength || maxLength <= 0 || text.length <= maxLength) return text;
+  return text.slice(0, maxLength - 1) + "…";
 }
 
 function resolveClosingText(purpose: string, locale: DialogueLocale, cycleContext?: CycleContext): string {

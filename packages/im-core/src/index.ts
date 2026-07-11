@@ -1,5 +1,7 @@
 export type Platform = "whatsapp" | "line" | "sms" | "test";
 
+export type TemplateKey = string;
+
 /**
  * Describes the interactive capabilities of a target IM platform.
  * L5 Dialogue uses this to choose the right message type (text/buttons/list)
@@ -17,6 +19,8 @@ export interface PlatformCapability {
   listTitleMaxLength: number;
   /** Maximum character length for a list row description (optional). */
   listDescriptionMaxLength?: number;
+  /** Maximum character length for a single free-form text body (optional). */
+  maxBodyLength?: number;
   /** Whether the platform supports pre-approved template messages. */
   supportsTemplates: boolean;
   /** Whether the platform supports rich formatting (markdown, html, etc.). */
@@ -33,6 +37,7 @@ export const DEFAULT_PLATFORM_CAPABILITIES: Record<Platform, PlatformCapability>
     listMaxRows: 10,
     listTitleMaxLength: 24,
     listDescriptionMaxLength: 72,
+    maxBodyLength: 1024,
     supportsTemplates: true,
     supportsRichText: false,
     freeTextRequiresSession: true,
@@ -44,6 +49,7 @@ export const DEFAULT_PLATFORM_CAPABILITIES: Record<Platform, PlatformCapability>
     listMaxRows: 10,
     listTitleMaxLength: 40,
     listDescriptionMaxLength: 60,
+    maxBodyLength: 5000,
     supportsTemplates: false,
     supportsRichText: false,
     freeTextRequiresSession: false,
@@ -54,6 +60,7 @@ export const DEFAULT_PLATFORM_CAPABILITIES: Record<Platform, PlatformCapability>
     buttonTitleMaxLength: 0,
     listMaxRows: 0,
     listTitleMaxLength: 0,
+    maxBodyLength: 1600,
     supportsTemplates: false,
     supportsRichText: false,
     freeTextRequiresSession: false,
@@ -65,6 +72,7 @@ export const DEFAULT_PLATFORM_CAPABILITIES: Record<Platform, PlatformCapability>
     listMaxRows: 10,
     listTitleMaxLength: 24,
     listDescriptionMaxLength: 72,
+    maxBodyLength: 1024,
     supportsTemplates: false,
     supportsRichText: false,
     freeTextRequiresSession: false,
@@ -100,7 +108,7 @@ export interface OutboundMessage {
     text: string;
     buttons?: Array<{ id: string; title: string }>;
     list?: Array<{ id: string; title: string; description?: string }>;
-    templateName?: string;
+    templateKey?: TemplateKey;
     templateVariables?: Record<string, string>;
   };
 }

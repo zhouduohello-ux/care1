@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import crypto from "node:crypto";
-import type { InboundMessage } from "@carememory/im-core";
+import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { createWhatsAppAdapter } from "./index.js";
 
 describe("WhatsAppAdapter", () => {
@@ -59,5 +59,43 @@ describe("WhatsAppAdapter", () => {
     expect(msg.channelId).toBe("447123456789");
     expect(msg.content.type).toBe("text");
     expect(msg.content.text).toBe("hello");
+  });
+
+  it("builds a template payload mapping templateKey to WhatsApp template name", () => {
+    const adapter = createWhatsAppAdapter();
+    const message: OutboundMessage = {
+      userId: "447123456789",
+      conversationContext: { requiresSession: false, priority: "normal" },
+      content: {
+        type: "template",
+        text: "Thanks for checking in.",
+        templateKey: "plain_text",
+        templateVariables: { body: "Thanks for checking in." },
+      },
+    };
+    const payload = adapter.buildPayload(message) as Record<string, unknown>;
+
+    expect(payload.type).toBe("template");
+    const template = payload.template as Record<string, unknown>;
+    expect(template.name).toBe("carememory_plain_text");
+    expect(template.language).toEqual({ code: "en_GB" });
+  });
+
+  it("falls back to plain_text template when templateKey is unknown", () => {
+    const adapter = createWhatsAppAdapter();
+    const message: OutboundMessage = {
+      userId: "447123456789",
+      conversationContext: { requiresSession: false, priority: "normal" },
+      content: {
+        type: "template",
+        text: "Fallback.",
+        templateKey: "unknown_key",
+        templateVariables: { body: "Fallback." },
+      },
+    };
+    const payload = adapter.buildPayload(message) as Record<string, unknown>;
+
+    const template = payload.template as Record<string, unknown>;
+    expect(template.name).toBe("carememory_plain_text");
   });
 });
