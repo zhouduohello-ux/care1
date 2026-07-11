@@ -174,6 +174,19 @@ export async function processPendingNudges(
       where: { id: checkIn.id },
       data: { nudgeSentAt: now },
     });
+    await prisma.event.create({
+      data: {
+        userId: checkIn.cycle.userId,
+        cycleId: checkIn.cycleId,
+        checkInId: checkIn.id,
+        type: "nudge_sent" as const,
+        payload: {
+          topic: (checkIn.pendingQuestion as { topic?: string } | null)?.topic,
+          nudgeAfterMs,
+        } as unknown as Prisma.InputJsonValue,
+        timestamp: now,
+      },
+    });
     sent.push(nudge);
   }
 

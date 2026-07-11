@@ -117,6 +117,7 @@ enum EventType {
   checkin_completed
   user_action
   turn_reprompt
+  nudge_sent
 }
 
 model Event {

@@ -264,6 +264,11 @@ describe("scheduler", () => {
           data: expect.objectContaining({ nudgeSentAt: clock.now() }),
         })
       );
+      expect(prisma.event.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ type: "nudge_sent" }),
+        })
+      );
     });
 
     it("throws on unknown job names", async () => {
