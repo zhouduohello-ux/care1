@@ -2,56 +2,9 @@ import type { PlannerInput, PlannerOutput, Observation } from "./types.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
 import type { LlmAuditCallback } from "./perception.js";
 import { loadDiseaseCorpus, searchCorpus } from "@carememory/rag";
+import { CHECKIN_QUESTIONS, EXCEPTION_QUESTIONS, getCheckInQuestion, getExceptionQuestion, type QuestionDefinition } from "./question-bank.js";
 
 const DISEASE_CORPUS = loadDiseaseCorpus("asthma");
-
-const CHECKIN_QUESTIONS = [
-  {
-    topic: "nighttime_symptoms",
-    purpose: "Track nighttime cough or wheeze over the past 2 days.",
-    expectedResponseType: "single_choice" as const,
-    options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
-    optionLabels: ["None", "Mild", "Disturbed sleep", "Woke me up"],
-    budgetCost: 1,
-  },
-  {
-    topic: "reliever_use",
-    purpose: "Track how often the reliever inhaler was used.",
-    expectedResponseType: "single_choice" as const,
-    options: ["reliever_0", "reliever_1", "reliever_2", "reliever_3_plus"],
-    optionLabels: ["0 times", "1 time", "2 times", "3+ times"],
-    budgetCost: 1,
-  },
-  {
-    topic: "activity_limitation",
-    purpose: "Check whether asthma limited daily activities or exercise.",
-    expectedResponseType: "single_choice" as const,
-    options: ["activity_no", "activity_yes"],
-    optionLabels: ["No limitation", "Yes, limited"],
-    budgetCost: 1,
-  },
-];
-
-const EXCEPTION_QUESTIONS = [
-  {
-    topic: "exception_clarification",
-    purpose: "Can you tell me more about what happened? When did it start and how severe was it?",
-    expectedResponseType: "text" as const,
-    budgetCost: 1,
-  },
-  {
-    topic: "exception_impact",
-    purpose: "Did it affect your sleep, work, exercise, or daily activities?",
-    expectedResponseType: "text" as const,
-    budgetCost: 1,
-  },
-  {
-    topic: "exception_action",
-    purpose: "Did you take your reliever inhaler or follow your asthma action plan? Did it help?",
-    expectedResponseType: "text" as const,
-    budgetCost: 1,
-  },
-];
 
 export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall?: LlmAuditCallback, allowLlm = true): Promise<PlannerOutput> {
   const { conversationContext, patientContext } = input;
@@ -64,7 +17,12 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
         "Thanks for sharing. If these symptoms persist or worsen, contact your GP or call 111. Call 999 if you're struggling to breathe."
       );
     }
-    const q = EXCEPTION_QUESTIONS[exceptionIndex];
+    const q = getExceptionQuestion(exceptionIndex);
+    if (!q) {
+      return endSession(
+        "Thanks for sharing. If these symptoms persist or worsen, contact your GP or call 111. Call 999 if you're struggling to breathe."
+      );
+    }
     return {
       reasoning: "Entered exception mode due to anomaly or safety flag. Asking clarifying question.",
       sessionObjective: "Clarify the reported concern and assess whether urgent care is needed.",
@@ -133,7 +91,7 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
 async function planWithLlm(
   input: PlannerInput,
   askedTopics: Set<string>,
-  fallbackQuestion: (typeof CHECKIN_QUESTIONS)[number],
+  fallbackQuestion: QuestionDefinition,
   llmClient: LLMClient,
   onLlmCall?: LlmAuditCallback
 ): Promise<PlannerOutput> {
@@ -186,7 +144,7 @@ Current intent: ${input.conversationContext.currentIntent}`;
 
   // Validate that the LLM chose a known uncovered topic
   if (parsed.nextAction.type === "ask") {
-    const question = CHECKIN_QUESTIONS.find((q) => q.topic === parsed.nextAction.topic);
+    const question = getCheckInQuestion(parsed.nextAction.topic);
     if (!question || askedTopics.has(parsed.nextAction.topic)) {
       throw new Error("LLM chose invalid or already asked topic");
     }
