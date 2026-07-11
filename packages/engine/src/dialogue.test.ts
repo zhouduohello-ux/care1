@@ -185,6 +185,51 @@ describe("renderMessage", () => {
     });
   });
 
+  describe("ask — multi_select", () => {
+    it("renders multi_select as list when supported", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "unknown_topic",
+        expectedResponseType: "multi_select",
+        options: ["pollen", "dust", "exercise", "cold_air"],
+      });
+      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+
+      expect(message.content.type).toBe("list");
+      expect(message.content.list).toHaveLength(4);
+      expect(message.content.text).toContain("Reply with all that apply");
+    });
+
+    it("renders multi_select as enumerated text when list is unavailable", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "unknown_topic",
+        expectedResponseType: "multi_select",
+        options: ["pollen", "dust", "exercise", "cold_air"],
+      });
+      const message = renderMessage("user_1", output, { capability: smsCapability });
+
+      expect(message.content.type).toBe("text");
+      expect(message.content.text).toContain("Reply with all that apply");
+      expect(message.content.text).toContain("pollen");
+      expect(message.content.text).toContain("cold_air");
+    });
+
+    it("uses known labels for multi_select topics", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "activity_limitation",
+        expectedResponseType: "multi_select",
+        options: ["activity_no", "activity_yes"],
+      });
+      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+
+      expect(message.content.type).toBe("list");
+      expect(message.content.list?.[0].title).toBe("No limitation");
+      expect(message.content.list?.[1].title).toBe("Yes, limited");
+    });
+  });
+
   describe("ask — text", () => {
     it("renders text question", () => {
       const output = makePlannerOutput({

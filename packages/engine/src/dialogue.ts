@@ -75,6 +75,17 @@ export function renderMessage(
     );
   }
 
+  if (action.type === "ask" && action.expectedResponseType === "multi_select" && action.options) {
+    return renderMultiSelectQuestion(
+      userId,
+      action.purpose,
+      action.topic,
+      action.options,
+      capability,
+      options.style ?? "v1"
+    );
+  }
+
   return {
     userId,
     conversationContext: { requiresSession: true, priority: "normal" },
@@ -185,6 +196,52 @@ function renderSingleChoiceQuestion(
     content: {
       type: "text",
       text: `${styledPurpose}\n\n${enumeratedOptions}`,
+    },
+  };
+}
+
+function renderMultiSelectQuestion(
+  userId: string,
+  purpose: string,
+  topic: string,
+  options: string[],
+  capability: PlatformCapability,
+  style: ConversationStyle
+): OutboundMessage {
+  const styledPurpose = styleText(purpose, style, "question");
+  const labels = getOptionLabels(topic, options);
+  const items = options.map((id, idx) => ({
+    id,
+    label: labels[idx] ?? id,
+  }));
+
+  const footer = "Reply with all that apply.";
+
+  if (capability.listMaxRows > 0 && items.length <= capability.listMaxRows) {
+    return {
+      userId,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "list",
+        text: `${styledPurpose}\n\n${footer}`,
+        list: items.map((item) => ({
+          id: item.id,
+          title: truncate(item.label, capability.listTitleMaxLength),
+        })),
+      },
+    };
+  }
+
+  const enumeratedOptions = items
+    .map((item, idx) => `${idx + 1}. ${item.label} (reply ${item.id})`)
+    .join("\n");
+
+  return {
+    userId,
+    conversationContext: { requiresSession: true, priority: "normal" },
+    content: {
+      type: "text",
+      text: `${styledPurpose}\n\n${footer}\n\n${enumeratedOptions}`,
     },
   };
 }
