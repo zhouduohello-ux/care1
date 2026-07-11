@@ -385,6 +385,109 @@
 
 ---
 
+## D23. 4 周计划周期自动延续
+
+**决策**：`PLAN_4_WEEK` cycle 在 28 天结束时发送 CONTINUE 提示；用户回复 CONTINUE 后创建下一个 4 周 cycle，旧 cycle 标记为 COMPLETED，所有周期数据汇聚到同一个 Disease Card。
+
+**边界**：
+- 4 周计划是付费验证单位，不是真实复诊周期；
+- 结束后系统询问是否继续下一个 4 周周期；
+- 用户可连续参与多个 4 周周期直到复诊；
+- Brief 可在复诊前基于多个周期数据生成。
+
+**影响文件**：`packages/engine/src/engine.ts`、`packages/engine/src/onboarding.ts`、`docs/func-spec.md` 第 3.2、4.5 节。
+
+---
+
+## D24. Turn Manager：pending question 轮次管理
+
+**决策**：Check-in 的待回答问题由 `packages/engine/src/turn-manager.ts` 统一管理，用户答非所问时进行重提示，超限后记录 `no_answer` 并继续下一题。
+
+**边界**：
+- `CheckIn` 新增 `pendingQuestion`（Json）与 `repromptCount`（Int）；
+- `EventType` 新增 `turn_reprompt`；
+- 重提示次数上限由 `PENDING_QUESTION_MAX_REPROMPTS` 环境变量控制，默认 2 次；
+- 重提示文案按次数变化（第 1 次 “I didn't catch that.”，第 2 次 “Just to confirm:”）；
+- `processInbound` 中 `recentObservations` 的获取移到 Turn Manager 之后，使 `no_answer` observation 对 Planner 可见。
+
+**影响文件**：`packages/engine/src/turn-manager.ts`、`packages/engine/src/engine.ts`、`packages/db/prisma/schema.prisma`、`docs/l5-dialogue-spec.md`。
+
+---
+
+## D25. Pending question 超时、nudge、审计与可配置时间
+
+**决策**：pending question 在发出后 12h 发送一次 gentle nudge，24h 未回复则静默超时记录 `no_answer`；nudge / timeout 时间可通过环境变量配置，所有关键动作写入 Event 审计。
+
+**边界**：
+- `CheckIn` 新增 `nudgeSentAt`；`EventType` 新增 `nudge_sent`；
+- scheduler 新增 `scan-pending-nudge` 与 `scan-expired-pending` repeatable job；
+- 环境变量 `PENDING_QUESTION_NUDGE_AFTER_MS`（默认 12h）与 `PENDING_QUESTION_TIMEOUT_MS`（默认 24h）控制时间；
+- 非法环境值自动回退到默认值；
+- 超时后不发送消息，仅更新 DB 状态并写入 `state_updated` Event。
+
+**影响文件**：`apps/api/src/services/scheduler.ts`、`packages/db/prisma/schema.prisma`、`docs/l5-dialogue-spec.md`、`.env.example`。
+
+---
+
+## D26. WhatsApp MVP 模板清单
+
+**决策**：MVP 阶段预定义 6 个 WhatsApp 模板，用于 24h 会话窗口外的主动消息。
+
+**边界**：
+- 模板：`welcome`、`checkin_reminder`、`brief_ready`、`safety_notice`、`stop_confirm`、`reactivation`；
+- 模板内容由 `packages/im-whatsapp/src/templates.ts` 集中管理；
+- 发送前检测 24h session window，窗口外必须 fallback 到模板；
+- 所有模板需通过 Meta 预审批。
+
+**影响文件**：`packages/im-whatsapp/src/templates.ts`、`packages/im-whatsapp/src/index.ts`、`apps/api/src/lib/dispatch-outbound.ts`、`docs/func-spec.md`。
+
+---
+
+## D27. Disease Card / Brief / Records 访问令牌
+
+**决策**：Disease Card、Brief 与患者记录页通过短期访问令牌共享，令牌不依赖登录会话。
+
+**边界**：
+- Disease Card：`/c/[cardId]?t={token}`；
+- Brief：`/b/[briefId]?t={token}`；
+- Records：`/records?t={token}`；
+- 令牌基于 `userId` + `cardId/briefId` + 过期时间签名生成，默认 7 天有效；
+- 过期/错误令牌返回 401/403；
+- MVP 医生不直接查看 Disease Card，只看 Brief。
+
+**影响文件**：`apps/api/src/lib/user-token.ts`、`apps/api/src/routes/disease-cards.ts`、`apps/api/src/routes/briefs.ts`、`apps/api/src/routes/records.ts`、`apps/web/src/app/`。
+
+---
+
+## D28. GDPR 导出/删除与 admin API
+
+**决策**：用户可通过 `EXPORT MY DATA` / `DELETE MY DATA` 导出或删除个人数据；运营方可通过 admin API 查询指标、导出/删除指定用户数据。
+
+**边界**：
+- 导出格式为 `carememory-gdpr-export-v1` JSON，7 天有效安全链接；
+- 默认排除 LLM 审计日志；
+- 删除为硬删除，包含用户、cycle、check-in、event、observation、narrative、disease card、brief；
+- admin API 需 `ADMIN_API_KEY`；
+- admin metrics 暴露用户数、check-in 数、LLM 调用、turn manager 统计等。
+
+**影响文件**：`apps/api/src/routes/export.ts`、`apps/api/src/routes/admin.ts`、`apps/api/src/lib/export-token.ts`、`docs/func-spec.md`。
+
+---
+
+## D29. 可观测性：Sentry、结构化日志与健康检查
+
+**决策**：API 与 Web 接入 Sentry，API 输出结构化 JSON 日志，`/health` 端点检查 PostgreSQL / Redis 依赖并返回版本。
+
+**边界**：
+- API：`@sentry/node` 捕获异常，Fastify/pino 输出 JSON 日志，支持 `LOG_LEVEL`；
+- Web：`@sentry/nextjs`；
+- `/health` 返回 db / redis 状态与 `version`；
+- 部署工作流在 Render 部署后自动等待 `/health` 并运行 staging E2E smoke。
+
+**影响文件**：`apps/api/src/index.ts`、`apps/api/src/routes/health.ts`、`apps/api/src/lib/logger.ts`、`.github/workflows/deploy.yml`、`infra/render.yaml`。
+
+---
+
 ## 变更记录
 
 | 版本 | 日期 | 变更内容 |
@@ -393,3 +496,4 @@
 | 0.2  | 2026-06-15 | 追加 D18 用户修正、D19 LLM 限流、D20 A/B 框架 |
 | 0.3  | 2026-06-15 | 追加 D21 出站消息幂等性统一 |
 | 0.4  | 2026-06-16 | 追加 D22 跨 cycle 迟到回答 |
+| 0.5  | 2026-07-11 | 追加 D23–D29：4 周周期延续、Turn Manager、pending question 超时/nudge/审计、WhatsApp 模板清单、访问令牌、GDPR/admin、可观测性 |
