@@ -5,7 +5,12 @@ import {
   pendingQuestionFromPlannerOutput,
   isAnswerToPendingQuestion,
   buildRepromptMessage,
-  getPendingQuestion,
+  classifyNonAnswer,
+  getTurnState,
+  recordReprompt,
+  clearPendingQuestion,
+  setPendingQuestion,
+  MAX_REPROMPTS,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -127,6 +132,16 @@ describe("isAnswerToPendingQuestion", () => {
   });
 });
 
+describe("classifyNonAnswer", () => {
+  it("classifies question intent", () => {
+    expect(classifyNonAnswer(makePerception({ intent: { primary: "question", confidence: 1 } }))).toBe("intent_question");
+  });
+
+  it("classifies option mismatch by default", () => {
+    expect(classifyNonAnswer(makePerception())).toBe("option_mismatch");
+  });
+});
+
 describe("buildRepromptMessage", () => {
   it("renders a reprompt for a pending single_choice question", async () => {
     const pending = {
@@ -136,44 +151,110 @@ describe("buildRepromptMessage", () => {
       options: ["activity_no", "activity_yes"],
       askedAt: "",
     };
-    const message = await buildRepromptMessage("user_1", pending, {});
+    const message = await buildRepromptMessage("user_1", pending, 1, {});
     expect(message.content.type).toBe("buttons");
     expect(message.content.text).toContain("Did asthma limit your activities?");
     expect(message.content.buttons?.map((b) => b.id)).toEqual(["activity_no", "activity_yes"]);
   });
 
-  it("prefixes the original purpose with a clarification", async () => {
+  it("uses a different prefix on the second reprompt", async () => {
     const pending = { topic: "severity", purpose: "Rate severity.", expectedResponseType: "text" as const, askedAt: "" };
-    const message = await buildRepromptMessage("user_1", pending, {});
-    expect(message.content.type).toBe("text");
-    expect(message.content.text).toContain("I didn't catch that.");
-    expect(message.content.text).toContain("Rate severity.");
+    const first = await buildRepromptMessage("user_1", pending, 1, {});
+    const second = await buildRepromptMessage("user_1", pending, 2, {});
+    expect(first.content.text).toContain("I didn't catch that.");
+    expect(second.content.text).toContain("Just to confirm:");
   });
 });
 
-describe("getPendingQuestion", () => {
-  it("returns pending question from latest outbound_message event payload", async () => {
+describe("getTurnState", () => {
+  it("returns pending question and reprompt count from CheckIn", async () => {
     const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "2026-07-11T00:00:00.000Z" };
     const prisma = {
-      event: {
-        findFirst: vi.fn().mockResolvedValue({
-          payload: { _pendingQuestion: pending },
-        }),
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ pendingQuestion: pending, repromptCount: 1 }),
       },
     } as unknown as import("@carememory/db").PrismaClient;
 
-    const result = await getPendingQuestion(prisma, "checkin_1");
-    expect(result).toEqual(pending);
-    expect(prisma.event.findFirst).toHaveBeenCalledWith({
-      where: { checkInId: "checkin_1", type: "outbound_message" },
-      orderBy: { timestamp: "desc" },
+    const result = await getTurnState(prisma, "checkin_1");
+    expect(result.pendingQuestion).toEqual(pending);
+    expect(result.repromptCount).toBe(1);
+    expect(prisma.checkIn.findUnique).toHaveBeenCalledWith({
+      where: { id: "checkin_1" },
+      select: { pendingQuestion: true, repromptCount: true },
     });
   });
 
-  it("returns undefined when no event exists", async () => {
+  it("returns zero reprompt count when no check-in exists", async () => {
     const prisma = {
-      event: { findFirst: vi.fn().mockResolvedValue(null) },
+      checkIn: { findUnique: vi.fn().mockResolvedValue(null) },
     } as unknown as import("@carememory/db").PrismaClient;
-    expect(await getPendingQuestion(prisma, "checkin_1")).toBeUndefined();
+    expect(await getTurnState(prisma, "checkin_1")).toEqual({ repromptCount: 0 });
+  });
+});
+
+describe("recordReprompt", () => {
+  it("updates CheckIn and creates a turn_reprompt event", async () => {
+    const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordReprompt(prisma, "user_1", "cycle_1", "checkin_1", pending, 2, "option_mismatch", new Date("2026-07-11T00:00:00Z"), "trace_1");
+
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ repromptCount: 2 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "turn_reprompt",
+          traceId: "trace_1",
+        }),
+      })
+    );
+  });
+});
+
+describe("clearPendingQuestion", () => {
+  it("clears pending question and resets reprompt count", async () => {
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = { checkIn: { update: checkInUpdate } } as unknown as import("@carememory/db").PrismaClient;
+    await clearPendingQuestion(prisma, "checkin_1");
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ repromptCount: 0 }),
+      })
+    );
+  });
+});
+
+describe("setPendingQuestion", () => {
+  it("sets pending question and resets reprompt count", async () => {
+    const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = { checkIn: { update: checkInUpdate } } as unknown as import("@carememory/db").PrismaClient;
+    await setPendingQuestion(prisma, "checkin_1", pending);
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ repromptCount: 0 }),
+      })
+    );
+  });
+});
+
+describe("MAX_REPROMPTS", () => {
+  it("is set to 2", () => {
+    expect(MAX_REPROMPTS).toBe(2);
   });
 });

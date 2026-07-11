@@ -93,6 +93,8 @@ model CheckIn {
   budgetRemaining       Int           @default(3)
   inExceptionMode       Boolean       @default(false)
   exceptionQuestionsAsked Int         @default(0)
+  repromptCount         Int         @default(0)
+  pendingQuestion       Json?
   reminderSentAt        DateTime?
 
   events           Event[]
@@ -112,6 +114,7 @@ enum EventType {
   checkin_scheduled
   checkin_sent
   checkin_completed
+  turn_reprompt
   user_action
 }
 

@@ -11,9 +11,14 @@ import { renderMessage } from "./dialogue.js";
 import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
-  getPendingQuestion,
+  getTurnState,
   isAnswerToPendingQuestion,
   buildRepromptMessage,
+  classifyNonAnswer,
+  recordReprompt,
+  clearPendingQuestion,
+  setPendingQuestion,
+  MAX_REPROMPTS,
   type PendingQuestion,
 } from "./turn-manager.js";
 import { hasLlmQuota, incrementLlmQuota } from "./llm-quota.js";
@@ -648,27 +653,62 @@ export async function processInbound(
 
   // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
   if (activeCheckIn) {
-    const pending = await getPendingQuestion(prisma, activeCheckIn.id);
+    const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
     if (pending && !isAnswerToPendingQuestion(message, perception, pending)) {
-      const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
-      const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-      const reprompt = await buildRepromptMessage(userId, pending, {
-        style: conversationStyle,
-        locale: user.locale,
-        cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
-        outOfSession: !isSessionOpen(user, context.now),
-        templateResolver: context.templateResolver,
-        templateContext: {
-          nickname: user.nickname ?? undefined,
-          firstName: user.nickname ?? undefined,
-        },
-      });
-      const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-      await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, pending);
-      return {
-        messages,
-        trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-      };
+      const nextRepromptCount = repromptCount + 1;
+
+      if (nextRepromptCount > MAX_REPROMPTS) {
+        // Too many failed attempts: record a no-answer observation so the planner skips this topic,
+        // then continue to the planner as usual.
+        await saveObservations(
+          prisma,
+          user.id,
+          cycle.id,
+          inboundEventId,
+          [
+            {
+              category: "subjective",
+              concept: pending.topic,
+              value: "no_answer",
+              confidence: 1,
+              extractedBy: "rule",
+            },
+          ],
+          context.now
+        );
+        await clearPendingQuestion(prisma, activeCheckIn.id);
+      } else {
+        const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+        const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+        const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, {
+          style: conversationStyle,
+          locale: user.locale,
+          cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+          outOfSession: !isSessionOpen(user, context.now),
+          templateResolver: context.templateResolver,
+          templateContext: {
+            nickname: user.nickname ?? undefined,
+            firstName: user.nickname ?? undefined,
+          },
+        });
+        const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+        await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+        await recordReprompt(
+          prisma,
+          user.id,
+          cycle.id,
+          activeCheckIn.id,
+          pending,
+          nextRepromptCount,
+          classifyNonAnswer(perception),
+          context.now,
+          perception.traceId
+        );
+        return {
+          messages,
+          trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+        };
+      }
     }
   }
 
@@ -746,9 +786,18 @@ export async function processInbound(
     cycle.id,
     new Date(),
     inboundEventId,
-    perception.traceId,
-    pendingQuestionFromPlannerOutput(plannerOutput)
+    perception.traceId
   );
+
+  // Persist the pending question (or clear it) on the active check-in for TurnManager.
+  if (activeCheckIn) {
+    const pending = pendingQuestionFromPlannerOutput(plannerOutput);
+    if (pending) {
+      await setPendingQuestion(prisma, activeCheckIn.id, pending);
+    } else {
+      await clearPendingQuestion(prisma, activeCheckIn.id);
+    }
+  }
 
   // Generate Disease Card and schedule next check-in when session ends
   if (plannerOutput.nextAction.type === "end_session" && activeCheckIn) {
@@ -979,9 +1028,13 @@ export async function handleCheckInTrigger(
     cycle.id,
     new Date(),
     checkIn.id,
-    undefined,
-    pendingQuestionFromPlannerOutput(plannerOutput)
+    undefined
   );
+
+  const pending = pendingQuestionFromPlannerOutput(plannerOutput);
+  if (pending) {
+    await setPendingQuestion(prisma, checkIn.id, pending);
+  }
 
   // Mark check-in as SENT now that messages have been sent
   await prisma.checkIn.update({

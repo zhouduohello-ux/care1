@@ -1,7 +1,7 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
+import { Prisma, type PrismaClient } from "@carememory/db";
 import type { PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
-import type { PrismaClient } from "@carememory/db";
 
 export interface PendingQuestion {
   topic: string;
@@ -10,6 +10,14 @@ export interface PendingQuestion {
   options?: string[];
   askedAt: string;
 }
+
+export interface TurnState {
+  pendingQuestion?: PendingQuestion;
+  repromptCount: number;
+}
+
+/** Maximum number of reprompts before the system gives up and moves on. */
+export const MAX_REPROMPTS = 2;
 
 export function pendingQuestionFromPlannerOutput(output: PlannerOutput): PendingQuestion | undefined {
   const action = output.nextAction;
@@ -24,20 +32,15 @@ export function pendingQuestionFromPlannerOutput(output: PlannerOutput): Pending
   };
 }
 
-export async function getPendingQuestion(
-  prisma: PrismaClient,
-  checkInId: string
-): Promise<PendingQuestion | undefined> {
-  const event = await prisma.event.findFirst({
-    where: { checkInId, type: "outbound_message" },
-    orderBy: { timestamp: "desc" },
+export async function getTurnState(prisma: PrismaClient, checkInId: string): Promise<TurnState> {
+  const checkIn = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { pendingQuestion: true, repromptCount: true },
   });
-  if (!event || typeof event.payload !== "object" || event.payload === null || Array.isArray(event.payload)) {
-    return undefined;
-  }
-  const pending = (event.payload as Record<string, unknown>)._pendingQuestion;
-  if (!pending || typeof pending !== "object") return undefined;
-  return pending as PendingQuestion;
+  return {
+    pendingQuestion: (checkIn?.pendingQuestion as PendingQuestion | undefined) ?? undefined,
+    repromptCount: checkIn?.repromptCount ?? 0,
+  };
 }
 
 export function isAnswerToPendingQuestion(
@@ -92,9 +95,33 @@ export function isAnswerToPendingQuestion(
   return false;
 }
 
+export function classifyNonAnswer(perception: PerceptionResult): string {
+  const nonAnswerIntents = new Set([
+    "question",
+    "help",
+    "stop",
+    "delete_data",
+    "export_data",
+    "continue_cycle",
+    "initiate",
+    "correction",
+  ]);
+  if (nonAnswerIntents.has(perception.intent.primary)) {
+    return `intent_${perception.intent.primary}`;
+  }
+  return "option_mismatch";
+}
+
+function repromptPrefix(repromptCount: number): string {
+  if (repromptCount <= 1) return "I didn't catch that. ";
+  if (repromptCount === 2) return "Just to confirm: ";
+  return "Still waiting: ";
+}
+
 export async function buildRepromptMessage(
   userId: string,
   pending: PendingQuestion,
+  repromptCount: number,
   options: RenderOptions
 ): Promise<OutboundMessage> {
   const repromptOutput: PlannerOutput = {
@@ -103,7 +130,7 @@ export async function buildRepromptMessage(
     nextAction: {
       type: "ask",
       topic: pending.topic,
-      purpose: `I didn't catch that. ${pending.purpose}`,
+      purpose: `${repromptPrefix(repromptCount)}${pending.purpose}`,
       expectedResponseType: pending.expectedResponseType,
       options: pending.options,
       budgetCost: 0,
@@ -113,4 +140,65 @@ export async function buildRepromptMessage(
   };
 
   return renderMessage(userId, repromptOutput, options);
+}
+
+export async function recordReprompt(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  repromptCount: number,
+  reason: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      repromptCount,
+      pendingQuestion: pending as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "turn_reprompt" as const,
+      payload: {
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+        repromptCount,
+        reason,
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
+}
+
+export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      pendingQuestion: Prisma.JsonNull,
+      repromptCount: 0,
+    },
+  });
+}
+
+export async function setPendingQuestion(
+  prisma: PrismaClient,
+  checkInId: string,
+  pending: PendingQuestion
+): Promise<void> {
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      pendingQuestion: pending as unknown as Prisma.InputJsonValue,
+      repromptCount: 0,
+    },
+  });
 }
