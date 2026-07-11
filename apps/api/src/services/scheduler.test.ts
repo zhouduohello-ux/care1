@@ -71,6 +71,8 @@ function makeClock(now: Date) {
 function makePrismaStub() {
   const cycles: Array<Record<string, unknown>> = [];
   const checkIns: Array<Record<string, unknown>> = [];
+  const observations: Array<Record<string, unknown>> = [];
+  const events: Array<Record<string, unknown>> = [];
 
   return {
     cycle: {
@@ -82,9 +84,23 @@ function makePrismaStub() {
       findMany: vi.fn(async () => checkIns),
       update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...checkIns[0], ...data })),
     },
+    observation: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        observations.push(data);
+        return data;
+      }),
+    },
+    event: {
+      create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        events.push(data);
+        return data;
+      }),
+    },
     _cycles: cycles,
     _checkIns: checkIns,
-  } as unknown as PrismaClient & { _cycles: typeof cycles; _checkIns: typeof checkIns };
+    _observations: observations,
+    _events: events,
+  } as unknown as PrismaClient & { _cycles: typeof cycles; _checkIns: typeof checkIns; _observations: typeof observations; _events: typeof events };
 }
 
 describe("scheduler", () => {
@@ -108,7 +124,7 @@ describe("scheduler", () => {
       expect(mockWorkerInstances[0].name).toBe(SCHEDULER_QUEUE_NAME);
     });
 
-    it("registers repeatable scanners for due check-ins and reminders", async () => {
+    it("registers repeatable scanners for due check-ins, reminders, and expired pending questions", async () => {
       const prisma = makePrismaStub();
       const clock = makeClock(new Date("2026-06-15T10:00:00.000Z"));
       const redis = { options: { host: "localhost", port: 6381 }, quit: vi.fn() } as unknown as Redis;
@@ -116,9 +132,9 @@ describe("scheduler", () => {
       await startScheduler(prisma, clock, redis, undefined, { intervalMs: 30_000 });
 
       const queue = mockQueueInstances[0];
-      expect(queue.upsertJobScheduler).toHaveBeenCalledTimes(2);
-      expect(queue.schedulers).toHaveLength(2);
-      expect(queue.schedulers.map((s) => s.id).sort()).toEqual(["scan-checkins", "scan-reminders"]);
+      expect(queue.upsertJobScheduler).toHaveBeenCalledTimes(3);
+      expect(queue.schedulers).toHaveLength(3);
+      expect(queue.schedulers.map((s) => s.id).sort()).toEqual(["scan-checkins", "scan-expired-pending", "scan-reminders"]);
       expect(queue.schedulers.every((s) => s.repeat?.every === 30_000)).toBe(true);
     });
 
@@ -176,6 +192,43 @@ describe("scheduler", () => {
             reminderSentAt: null,
           },
           include: { cycle: { include: { user: true } } },
+        })
+      );
+    });
+
+    it("processes scan-expired-pending by marking stale pending questions as no_answer", async () => {
+      const prisma = makePrismaStub();
+      prisma._checkIns.push({
+        id: "ci_1",
+        status: "SENT",
+        sentAt: new Date("2026-06-14T08:00:00.000Z"),
+        pendingQuestion: { topic: "nighttime_symptoms" },
+        cycleId: "cycle_1",
+        cycle: { id: "cycle_1", userId: "user_1", user: { phoneNumber: "447123456789" } },
+      });
+      const clock = makeClock(new Date("2026-06-15T10:00:00.000Z"));
+      const processor = createProcessor({ prisma, clock });
+
+      await processor({ name: "scan-expired-pending", data: {}, id: "job-3" } as unknown as Job);
+
+      expect(prisma.checkIn.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: "SENT",
+            sentAt: { lte: new Date(clock.now().getTime() - 24 * 60 * 60 * 1000) },
+            pendingQuestion: { not: expect.anything() },
+          },
+          include: { cycle: { include: { user: true } } },
+        })
+      );
+      expect(prisma.observation.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ concept: "nighttime_symptoms", value: "no_answer" }),
+        })
+      );
+      expect(prisma.checkIn.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ status: "MISSED", pendingQuestion: expect.anything() }),
         })
       );
     });
