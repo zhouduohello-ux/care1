@@ -1,7 +1,7 @@
 # CareMemory L5 对话层（Dialogue Layer）规格文档
 
 > **文档编号**：SPEC-L5-001  
-> **版本**：v1.6  
+> **版本**：v1.7  
 > **分支**：`feat/l5-dialogue-optimization`  
 > **对应架构层**：L5 Dialogue  
 > **上游**：L4 Planner | **下游**：L6 Safety、IM Adapter（WhatsApp）  
@@ -311,6 +311,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | 平台 capability 抽象 | ✅ 已实现 | `packages/im-core/src/index.ts` |
 | Brief 链接消息生成 | ✅ 已实现（`generate_brief` + `briefUrl`） | `packages/engine/src/dialogue.ts` |
 | 多选（multi_select）渲染 | ✅ 已实现 | `packages/engine/src/dialogue.ts` |
+| 多语言支持（locale） | ✅ 已实现（en-GB / cy-GB） | `packages/engine/src/dialogue-locales/` |
 | 模板消息生成 | ❌ 未实现 | 当前由 dispatch 层负责 |
 | 多语言支持 | ❌ 未实现 | 规划项 L5-OPT-005 |
 | A/B 对话风格应用 | ✅ 已实现（规则化 v1/v2） | `packages/engine/src/dialogue-styles.ts` |
@@ -399,6 +400,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |---|---|---|---|---|
+| 2026-07-11 | v1.7 | 实现多语言 locale 基础设施，支持 `en-GB` / `cy-GB`，`renderMessage` 新增 `locale` 参数 | AI Agent |
 | 2026-07-11 | v1.6 | 实现 `multi_select` 多选渲染（list / 枚举文本 + "Reply with all that apply"） | AI Agent |
 | 2026-07-11 | v1.5 | 实现 `generate_brief` 消息渲染，check-in 结束后自动发送带 Brief 链接的 follow-up 消息 | AI Agent |
 | 2026-07-11 | v1.4 | 将周期结束提示从 `engine.ts` 迁移到 L5，新增 `CycleContext` 驱动 `end_session` 文案，消除消息突变 | AI Agent |
