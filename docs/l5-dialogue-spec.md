@@ -1,7 +1,7 @@
 # CareMemory L5 对话层（Dialogue Layer）规格文档
 
 > **文档编号**：SPEC-L5-001  
-> **版本**：v1.0  
+> **版本**：v1.1  
 > **分支**：`feat/l5-dialogue-optimization`  
 > **对应架构层**：L5 Dialogue  
 > **上游**：L4 Planner | **下游**：L6 Safety、IM Adapter（WhatsApp）  
@@ -77,21 +77,34 @@ export interface OutboundMessage {
 
 ---
 
-## 3. L4 → L5 渲染决策矩阵
+## 3. L4 → L5 消息类型与处理矩阵
 
-| `nextAction.type` | `expectedResponseType` | L5 输出 `content.type` | `priority` | 说明 |
-|---|---|---|---|---|
-| `safety_response` | 任意 | `text` | `urgent` | 高风险安全响应，直接展示 `purpose` |
-| `end_session` | 任意 | `text` | `normal` | check-in 结束语 |
-| `ask` | `single_choice` + `options` | `buttons` | `normal` | 选项 ID 通过 `getOptionLabels` 映射为可读标题 |
-| `ask` | `scale` | `buttons`（规划） | `normal` | **当前未实现**，建议渲染为 1–5 数字按钮 |
-| `ask` | `multi_select` | `list`（规划） | `normal` | **当前未实现** |
-| `ask` | `text` | `text` | `normal` | 开放式问题 |
-| `inform` | 任意 | `text` | `normal` | 通知/提示 |
-| `remind` | 任意 | `text` | `normal` | 提醒 |
-| `generate_brief` | 任意 | `text` | `normal` | 当前降级为文本通知 |
+### 3.1 L4 实际会抛给 L5 的类型
 
-### 3.1 单选按钮的标签映射
+根据 `packages/engine/src/planner.ts` 当前实现，L4 只会生成以下 3 种 `nextAction.type`：
+
+| L4 输出类型 | 触发场景 | 附带字段 |
+|---|---|---|
+| `ask` | 正常 check-in，询问下一个未覆盖的控制问题 | `topic`, `purpose`, `expectedResponseType`, `options`, `budgetCost` |
+| `ask` | 异常模式（exception mode）下的澄清问题 | `topic="exception_clarification"`, `expectedResponseType="text"`, 无 `options` |
+| `end_session` | 问题全部问完 / 预算耗尽 / 异常模式结束 | `purpose` 为结束语 |
+| `safety_response` | 近期观测包含 `adverse_event` 类别 | `purpose` 为安全提示 |
+
+> **注意**：`PlannerOutput` 的 TypeScript 类型还声明了 `inform`、`remind`、`generate_brief`，但当前 `planner.ts` 的实现**永远不会**产生这 3 种类型。L5 把它们作为兜底按纯文本处理即可。
+
+### 3.2 L5 处理矩阵
+
+| L4 `type` | L4 `expectedResponseType` | L5 处理动作 | 输出 `content.type` | `priority` | 当前状态 |
+|---|---|---|---|---|---|
+| `safety_response` | 任意 | 直接展示 `purpose`，不做交互包装 | `text` | `urgent` | ✅ 已实现 |
+| `end_session` | 任意 | 直接展示 `purpose` 作为结束语 | `text` | `normal` | ✅ 已实现 |
+| `ask` | `single_choice` + `options` | 将 `options` 映射为可读按钮标题 | `buttons` | `normal` | ✅ 已实现 |
+| `ask` | `text` | 直接展示 `purpose` 作为开放式问题 | `text` | `normal` | ✅ 已实现 |
+| `ask` | `scale` | 渲染 1–5 分按钮 | `buttons`（建议） | `normal` | ❌ 未实现 |
+| `ask` | `multi_select` | 渲染 list 或分步交互 | `list`（建议） | `normal` | ❌ 未实现 |
+| `inform` / `remind` / `generate_brief` | 任意 | 兜底为纯文本 | `text` | `normal` | ⚠️ 兜底 |
+
+### 3.3 单选按钮的标签映射
 
 当前硬编码映射（`packages/engine/src/dialogue.ts`）：
 
@@ -102,6 +115,51 @@ export interface OutboundMessage {
 | `activity_limitation` | `["activity_no", "activity_yes"]` | `["No limitation", "Yes, limited"]` |
 
 > **设计债**：标签映射与 `packages/engine/src/planner.ts` 中的 `CHECKIN_QUESTIONS` 存在重复定义。未来应统一到一个共享的 question bank。
+
+### 3.4 L5 的通用处理职责
+
+无论收到哪种类型，L5 都必须完成：
+
+1. **设置 `conversationContext`**
+   - `requiresSession: true`（几乎所有消息都需要在 24h 会话窗口内发送）
+   - `priority: "urgent"` 仅对 `safety_response`，其余为 `"normal"`
+2. **选项 ID → 可读标题映射**
+   - 已知 topic 使用硬编码标签表
+   - 未知 topic 回退到 `options` 原始 ID
+3. **保持平台无关**
+   - L5 只生成 `OutboundMessage`，不生成 WhatsApp payload
+   - WhatsApp 适配由 `packages/im-whatsapp/src/index.ts` 负责
+4. **不修改患者状态**
+   - L5 不写数据库、不更新 check-in 预算、不产生 observation
+   - 预算扣减在引擎主流程中 L5 之后执行
+
+### 3.5 不经过 L5 的场景
+
+以下场景由引擎上层直接处理，不会调用 L4 / L5：
+
+| 场景 | 处理方式 |
+|---|---|
+| 高风险安全标记（L1 已识别 high risk） | 引擎主流程直接返回急救消息 |
+| 系统命令（STOP / DELETE MY DATA / EXPORT MY DATA / HELP 等） | 引擎主流程直接构造回复 |
+| onboarding 流程 | `packages/engine/src/onboarding.ts` 直接生成消息 |
+| 迟到回答 / 跨 cycle 回复 | 引擎主流程直接构造确认消息 |
+
+### 3.6 流程速查图
+
+```
+L4 Planner 输出
+    │
+    ├──► safety_response ──────► L5: urgent 文本 ──────► L6 安全校验 ──────► 发送
+    │
+    ├──► ask (single_choice) ──► L5: 按钮消息 ─────────► L6 安全校验 ──────► 发送
+    │
+    ├──► ask (text) ───────────► L5: 普通文本 ─────────► L6 安全校验 ──────► 发送
+    │
+    └──► end_session ──────────► L5: 结束语文本 ───────► L6 安全校验 ──────► 发送
+                                                              │
+                                                              ▼
+                                                    引擎：更新 DiseaseCard / Brief / 下次 check-in
+```
 
 ---
 
@@ -337,6 +395,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |---|---|---|---|---|
+| 2026-07-11 | v1.1 | 补充 L4 实际输出类型、L5 通用职责、不经过 L5 的场景及流程速查图 | AI Agent |
 | 2026-07-11 | v1.0 | 初稿：梳理 L5 接口、渲染矩阵、Adapter 映射、已知债务与优化 backlog | AI Agent |
 
 ---
