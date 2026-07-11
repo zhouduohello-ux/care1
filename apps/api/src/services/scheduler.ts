@@ -8,7 +8,7 @@ import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
 
 export const SCHEDULER_QUEUE_NAME = "carememory-scheduler";
 
-export type SchedulerJobName = "scan-checkins" | "scan-reminders" | "scan-expired-pending";
+export type SchedulerJobName = "scan-checkins" | "scan-reminders" | "scan-expired-pending" | "scan-pending-nudge";
 
 export interface Scheduler {
   queue: Queue;
@@ -114,6 +114,45 @@ export async function processExpiredPendingQuestions(
   }
 }
 
+export async function processPendingNudges(
+  prisma: PrismaClient,
+  clock: Clock,
+  opts: { nudgeAfterMs?: number } = {}
+) {
+  const now = clock.now();
+  const nudgeAfterMs = opts.nudgeAfterMs ?? 12 * 60 * 60 * 1000;
+  const deadline = new Date(now.getTime() - nudgeAfterMs);
+
+  const nudgable = await prisma.checkIn.findMany({
+    where: {
+      status: "SENT",
+      sentAt: { lte: deadline },
+      nudgeSentAt: null,
+      pendingQuestion: { not: Prisma.JsonNull },
+    },
+    include: { cycle: { include: { user: true } } },
+  });
+
+  for (const checkIn of nudgable) {
+    if (!checkIn.cycle?.user) continue;
+
+    const nudge = {
+      userId: checkIn.cycle.user.phoneNumber,
+      conversationContext: { requiresSession: true, priority: "normal" as const },
+      content: {
+        type: "text" as const,
+        text: "Hi, just a gentle nudge — you have a pending CareMemory check-in waiting for your reply. It only takes a minute. If you're having severe breathing problems, call 999 or follow your asthma action plan.",
+      },
+    };
+
+    await dispatchOutboundMessages(prisma, [nudge], now);
+    await prisma.checkIn.update({
+      where: { id: checkIn.id },
+      data: { nudgeSentAt: now },
+    });
+  }
+}
+
 export async function processDueReminders(prisma: PrismaClient, clock: Clock) {
   const now = clock.now();
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
@@ -158,6 +197,9 @@ export function createProcessor(deps: { prisma: PrismaClient; clock: Clock; quot
         break;
       case "scan-expired-pending":
         await processExpiredPendingQuestions(deps.prisma, deps.clock.now());
+        break;
+      case "scan-pending-nudge":
+        await processPendingNudges(deps.prisma, deps.clock);
         break;
       default:
         throw new Error(`Unknown scheduler job name: ${job.name}`);
@@ -212,6 +254,11 @@ export async function startScheduler(
     "scan-expired-pending",
     { every: intervalMs },
     { name: "scan-expired-pending", data: {}, opts: { attempts: 3, backoff: { type: "exponential", delay: 1000 } } }
+  );
+  await queue.upsertJobScheduler(
+    "scan-pending-nudge",
+    { every: intervalMs },
+    { name: "scan-pending-nudge", data: {}, opts: { attempts: 3, backoff: { type: "exponential", delay: 1000 } } }
   );
 
   return {
