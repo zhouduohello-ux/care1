@@ -669,7 +669,9 @@ export async function processInbound(
   await savePlannerEvent(prisma, user.id, cycle.id, plannerOutput, perception.traceId);
 
   // L5 Dialogue
-  const outbound = renderMessage(userId, plannerOutput);
+  const outbound = renderMessage(userId, plannerOutput, {
+    style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+  });
 
   // Update check-in budget if active
   if (activeCheckIn && plannerOutput.nextAction.budgetCost > 0) {
@@ -873,7 +875,9 @@ export async function handleCheckInTrigger(
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, cycle.userId, cycle.id, plannerOutput);
 
-  const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput);
+  const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput, {
+    style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+  });
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
   await saveOutboundMessages(prisma, cycle.userId, messages, cycle.id, new Date(), checkIn.id);
 

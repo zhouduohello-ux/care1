@@ -243,4 +243,62 @@ describe("renderMessage", () => {
       expect(message.content.list?.[0].title.endsWith("…")).toBe(true);
     });
   });
+
+  describe("conversation style", () => {
+    it("v1 leaves text unchanged", () => {
+      const output = makePlannerOutput({
+        type: "end_session",
+        purpose: "Thank you for your updates. Your Disease Card will be updated shortly.",
+      });
+      const message = renderMessage("user_1", output, { style: "v1" });
+
+      expect(message.content.text).toBe("Thank you for your updates. Your Disease Card will be updated shortly.");
+    });
+
+    it("v2 restyles closing messages", () => {
+      const output = makePlannerOutput({
+        type: "end_session",
+        purpose: "Thank you for your updates. Your Disease Card will be updated shortly.",
+      });
+      const message = renderMessage("user_1", output, { style: "v2" });
+
+      expect(message.content.text).toContain("Thanks for the update");
+      expect(message.content.text).toContain("I'll update your Disease Card now");
+    });
+
+    it("v2 restyles question prompts", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "exception_clarification",
+        expectedResponseType: "text",
+        purpose: "Please tell me more about what happened.",
+      });
+      const message = renderMessage("user_1", output, { style: "v2" });
+
+      expect(message.content.text).not.toContain("Please tell me");
+      expect(message.content.text.toLowerCase()).toContain("could you");
+    });
+
+    it("v2 adds empathy to safety responses without removing safety instruction", () => {
+      const output = makePlannerOutput({
+        type: "safety_response",
+        purpose: "If you're having severe breathing problems, call 999 or follow your asthma action plan.",
+      });
+      const message = renderMessage("user_1", output, { style: "v2" });
+
+      expect(message.content.text).toContain("I'm sorry you're struggling");
+      expect(message.content.text).toContain("call 999");
+    });
+
+    it("preserves safety instruction length dominance in v2 safety responses", () => {
+      const output = makePlannerOutput({
+        type: "safety_response",
+        purpose: "You reported a possible reaction. Please contact your GP or pharmacist, or call 111 if it feels serious.",
+      });
+      const message = renderMessage("user_1", output, { style: "v2" });
+
+      expect(message.content.text).toContain("Thanks for flagging this");
+      expect(message.content.text).toContain("contact your GP");
+    });
+  });
 });

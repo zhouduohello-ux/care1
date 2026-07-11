@@ -1,10 +1,12 @@
 import type { OutboundMessage, PlatformCapability } from "@carememory/im-core";
 import { DEFAULT_PLATFORM_CAPABILITIES } from "@carememory/im-core";
 import type { PlannerOutput } from "./types.js";
+import { styleText, type ConversationStyle } from "./dialogue-styles.js";
 
 export interface RenderOptions {
   capability?: PlatformCapability;
   listActionButtonTitle?: string;
+  style?: ConversationStyle;
 }
 
 export function renderMessage(
@@ -21,7 +23,7 @@ export function renderMessage(
       conversationContext: { requiresSession: true, priority: "urgent" },
       content: {
         type: "text",
-        text: action.purpose,
+        text: styleText(action.purpose, options.style ?? "v1", "safety"),
       },
     };
   }
@@ -32,13 +34,13 @@ export function renderMessage(
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "text",
-        text: action.purpose,
+        text: styleText(action.purpose, options.style ?? "v1", "closing"),
       },
     };
   }
 
   if (action.type === "ask" && action.expectedResponseType === "scale") {
-    return renderScaleQuestion(userId, action.purpose, capability);
+    return renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1");
   }
 
   if (action.type === "ask" && action.expectedResponseType === "single_choice" && action.options) {
@@ -48,6 +50,7 @@ export function renderMessage(
       action.topic,
       action.options,
       capability,
+      options.style ?? "v1",
       options.listActionButtonTitle
     );
   }
@@ -57,7 +60,7 @@ export function renderMessage(
     conversationContext: { requiresSession: true, priority: "normal" },
     content: {
       type: "text",
-      text: action.purpose,
+      text: styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform"),
     },
   };
 }
@@ -65,8 +68,10 @@ export function renderMessage(
 function renderScaleQuestion(
   userId: string,
   purpose: string,
-  capability: PlatformCapability
+  capability: PlatformCapability,
+  style: ConversationStyle
 ): OutboundMessage {
+  const styledPurpose = styleText(purpose, style, "question");
   const scaleOptions = ["1", "2", "3", "4", "5"];
 
   if (capability.maxButtons >= scaleOptions.length) {
@@ -75,7 +80,7 @@ function renderScaleQuestion(
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "buttons",
-        text: purpose,
+        text: styledPurpose,
         buttons: scaleOptions.map((id) => ({
           id,
           title: truncate(id, capability.buttonTitleMaxLength),
@@ -89,7 +94,7 @@ function renderScaleQuestion(
     conversationContext: { requiresSession: true, priority: "normal" },
     content: {
       type: "list",
-      text: purpose,
+      text: styledPurpose,
       list: scaleOptions.map((id) => ({
         id,
         title: truncate(id, capability.listTitleMaxLength),
@@ -104,8 +109,10 @@ function renderSingleChoiceQuestion(
   topic: string,
   options: string[],
   capability: PlatformCapability,
+  style: ConversationStyle,
   listActionButtonTitle = "Choose"
 ): OutboundMessage {
+  const styledPurpose = styleText(purpose, style, "question");
   const labels = getOptionLabels(topic, options);
 
   const items = options.map((id, idx) => ({
@@ -123,7 +130,7 @@ function renderSingleChoiceQuestion(
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "buttons",
-        text: purpose,
+        text: styledPurpose,
         buttons: items.map((item) => ({
           id: item.id,
           title: item.label,
@@ -138,7 +145,7 @@ function renderSingleChoiceQuestion(
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "list",
-        text: purpose,
+        text: styledPurpose,
         list: items.map((item) => ({
           id: item.id,
           title: truncate(item.label, capability.listTitleMaxLength),
@@ -157,7 +164,7 @@ function renderSingleChoiceQuestion(
     conversationContext: { requiresSession: true, priority: "normal" },
     content: {
       type: "text",
-      text: `${purpose}\n\n${enumeratedOptions}`,
+      text: `${styledPurpose}\n\n${enumeratedOptions}`,
     },
   };
 }
