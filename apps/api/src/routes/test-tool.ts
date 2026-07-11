@@ -97,7 +97,25 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
   }
 
   async function simulateMessage(userId: string, text?: string, buttonId?: string) {
+    // In real WhatsApp, a user reply opens the 24h session window before the business
+    // responds. Mirror that in the test tool so outbound message type selection sees the
+    // window as open during processInbound.
+    const user = await fastify.prisma.user.findUnique({ where: { phoneNumber: userId } });
+    if (user) {
+      await fastify.prisma.user.update({
+        where: { id: user.id },
+        data: { sessionWindowExpiresAt: new Date(fastify.clock.now(userId).getTime() + 24 * 60 * 60 * 1000) },
+      });
+    }
     const result = await processInbound(engineContext(userId), buildInboundMessage(userId, text, buttonId));
+    // Keep the 24h session window open after each simulated user reply so subsequent
+    // outbound questions can use interactive message types instead of templates.
+    if (user) {
+      await fastify.prisma.user.update({
+        where: { id: user.id },
+        data: { sessionWindowExpiresAt: new Date(fastify.clock.now(userId).getTime() + 24 * 60 * 60 * 1000) },
+      });
+    }
     return { outboundMessages: result.messages, trace: result.trace };
   }
 

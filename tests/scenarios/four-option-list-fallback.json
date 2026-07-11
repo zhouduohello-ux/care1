@@ -1,0 +1,32 @@
+{
+  "id": "four_option_list_fallback",
+  "name": "4-option question falls back to WhatsApp list",
+  "description": "After the user replies to the first (template) check-in question, the session is open. A subsequent 4-option single_choice question must render as a list message because WhatsApp buttons are limited to 3.",
+  "user": {
+    "phoneNumber": "test_four_option_list"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message_type",
+      "op": "eq",
+      "value": "list",
+      "description": "Second 4-option check-in question renders as list due to WhatsApp button limit"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "reliever",
+      "caseInsensitive": true,
+      "description": "List message contains the reliever question text"
+    }
+  ]
+}
