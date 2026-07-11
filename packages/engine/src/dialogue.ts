@@ -3,10 +3,17 @@ import { DEFAULT_PLATFORM_CAPABILITIES } from "@carememory/im-core";
 import type { PlannerOutput } from "./types.js";
 import { styleText, type ConversationStyle } from "./dialogue-styles.js";
 
+export interface CycleContext {
+  cycleType?: "TRIAL_7_DAY" | "PLAN_4_WEEK";
+  cycleDay?: number;
+  briefReady?: boolean;
+}
+
 export interface RenderOptions {
   capability?: PlatformCapability;
   listActionButtonTitle?: string;
   style?: ConversationStyle;
+  cycleContext?: CycleContext;
 }
 
 export function renderMessage(
@@ -29,12 +36,13 @@ export function renderMessage(
   }
 
   if (action.type === "end_session") {
+    const closingText = resolveClosingText(action.purpose, options.cycleContext);
     return {
       userId,
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "text",
-        text: styleText(action.purpose, options.style ?? "v1", "closing"),
+        text: styleText(closingText, options.style ?? "v1", "closing"),
       },
     };
   }
@@ -182,4 +190,22 @@ function truncate(text: string, maxLength: number): string {
   if (maxLength <= 0) return text;
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength - 1) + "…";
+}
+
+function resolveClosingText(purpose: string, cycleContext?: CycleContext): string {
+  if (!cycleContext) return purpose;
+
+  const { cycleType, cycleDay, briefReady } = cycleContext;
+
+  if (cycleType === "PLAN_4_WEEK" && cycleDay !== undefined && cycleDay >= 28) {
+    return "You've reached the end of your 4-week CareMemory plan. Reply CONTINUE to start your next 4-week cycle, or STOP to pause.";
+  }
+
+  if (cycleType === "TRIAL_7_DAY" && cycleDay !== undefined && cycleDay >= 7) {
+    return briefReady
+      ? "You've completed your 7-day trial. Your Disease Card and Brief are ready. Reply CONTINUE to start a 4-week plan, or STOP to pause."
+      : "You've completed your 7-day trial. Reply CONTINUE to start a 4-week plan, or STOP to pause.";
+  }
+
+  return purpose;
 }

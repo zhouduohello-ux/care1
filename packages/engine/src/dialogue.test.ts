@@ -301,4 +301,42 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("contact your GP");
     });
   });
+
+  describe("cycle context closing messages", () => {
+    it("uses default purpose when no cycle context is provided", () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
+      const message = renderMessage("user_1", output);
+
+      expect(message.content.text).toBe("Thanks for checking in.");
+    });
+
+    it("generates 4-week plan completion message", () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
+      const message = renderMessage("user_1", output, {
+        cycleContext: { cycleType: "PLAN_4_WEEK", cycleDay: 28, briefReady: true },
+      });
+
+      expect(message.content.text).toContain("end of your 4-week CareMemory plan");
+      expect(message.content.text).toContain("CONTINUE");
+    });
+
+    it("generates 7-day trial completion message with Brief mention", () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
+      const message = renderMessage("user_1", output, {
+        cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 7, briefReady: true },
+      });
+
+      expect(message.content.text).toContain("completed your 7-day trial");
+      expect(message.content.text).toContain("Disease Card and Brief are ready");
+    });
+
+    it("uses default purpose before cycle end threshold", () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "All questions answered." });
+      const message = renderMessage("user_1", output, {
+        cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 3, briefReady: true },
+      });
+
+      expect(message.content.text).toContain("All questions answered.");
+    });
+  });
 });

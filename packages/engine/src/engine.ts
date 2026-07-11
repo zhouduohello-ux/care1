@@ -669,8 +669,14 @@ export async function processInbound(
   await savePlannerEvent(prisma, user.id, cycle.id, plannerOutput, perception.traceId);
 
   // L5 Dialogue
+  const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
   const outbound = renderMessage(userId, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+    cycleContext: {
+      cycleType: cycle.type,
+      cycleDay,
+      briefReady: true,
+    },
   });
 
   // Update check-in budget if active
@@ -753,26 +759,15 @@ export async function processInbound(
       data: { webUrl: `/b/${brief.id}?t=${briefAccessToken}` },
     });
 
-    // For 4-week plans that have reached ~28 days, prompt the user to continue rather than scheduling another check-in on this cycle.
+    // For 4-week plans that have reached ~28 days, or 7-day trials that have
+    // reached ~7 days, mark the cycle as COMPLETED. L5 has already generated
+    // the appropriate closing message via cycleContext.
     const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-    if (cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) {
+    if ((cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) || (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7)) {
       await prisma.cycle.update({
         where: { id: cycle.id },
         data: { status: "COMPLETED", endedAt: context.now },
       });
-      if (messages[0]?.content.type === "text") {
-        messages[0].content.text =
-          "You've reached the end of your 4-week CareMemory plan. Reply CONTINUE to start your next 4-week cycle, or STOP to pause.";
-      }
-    } else if (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7) {
-      await prisma.cycle.update({
-        where: { id: cycle.id },
-        data: { status: "COMPLETED", endedAt: context.now },
-      });
-      if (messages[0]?.content.type === "text") {
-        messages[0].content.text =
-          "You've completed your 7-day trial. Your Disease Card and Brief are ready. Reply CONTINUE to start a 4-week plan, or STOP to pause.";
-      }
     } else {
       // Schedule the next check-in based on the user's A/B bucket (48h vs 72h) at 10:00 local time
       const nextCheckinAt = scheduleNextCheckInOffset(userId, context.now);
@@ -877,6 +872,11 @@ export async function handleCheckInTrigger(
 
   const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+    cycleContext: {
+      cycleType: cycle.type,
+      cycleDay: plannerInput.patientContext.cycleDay,
+      briefReady: true,
+    },
   });
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
   await saveOutboundMessages(prisma, cycle.userId, messages, cycle.id, new Date(), checkIn.id);
