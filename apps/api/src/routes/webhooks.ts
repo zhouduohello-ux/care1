@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { InboundMessage, OutboundMessage, Platform } from "@carememory/im-core";
+import type { OutboundMessage, Platform } from "@carememory/im-core";
 import { DefaultPlatformRegistry } from "@carememory/im-core";
 
 

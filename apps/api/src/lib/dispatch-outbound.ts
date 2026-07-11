@@ -4,8 +4,6 @@ import type { OutboundMessage } from "@carememory/im-core";
 import { WHATSAPP_TEMPLATES, selectTemplate, buildTemplateVariables } from "@carememory/im-whatsapp";
 import { sendOutboundMessages } from "./outbound-sender.js";
 
-const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
-
 function makeIdempotencyKey(message: OutboundMessage, now: Date): string {
   const hash = crypto
     .createHash("sha256")
@@ -55,7 +53,7 @@ export async function dispatchOutboundMessages(
         content: {
           type: "template",
           text: message.content.text,
-          templateName: template.name,
+          templateKey: template.name,
           templateVariables,
         },
       };

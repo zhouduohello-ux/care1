@@ -27,11 +27,12 @@ const prisma = new PrismaClient();
 
 function inboundMsg(text: string, msgId?: string): InboundMessage {
   return {
+    platform: "whatsapp" as const,
     messageId: msgId ?? `wa_${Date.now()}_${Math.random().toString(36).slice(2)}`,
     userId: "447000000001",
     channelId: "447000000001",
     timestamp: new Date(),
-    content: { type: "text", text },
+    content: { type: "text", text, rawPayload: {} },
   };
 }
 
@@ -70,7 +71,7 @@ let testCycleId = "";
 
 // ── Suite ──
 
-describe("L2 Memory 层集成测试", () => {
+describe.skipIf(!process.env.DATABASE_URL)("L2 Memory 层集成测试", () => {
   beforeAll(async () => {
     // Create test user + cycle
     const user = await prisma.user.create({

@@ -91,9 +91,11 @@ model CheckIn {
   sessionObjective      String?
   questionsAsked        Int           @default(0)
   budgetRemaining       Int           @default(3)
-  inExceptionMode       Boolean       @default(false)
-  exceptionQuestionsAsked Int         @default(0)
-  reminderSentAt        DateTime?
+  inExceptionMode         Boolean       @default(false)
+  exceptionQuestionsAsked Int           @default(0)
+  repromptCount           Int           @default(0)
+  pendingQuestion         Json?
+  reminderSentAt          DateTime?
 
   events           Event[]
 
@@ -113,6 +115,7 @@ enum EventType {
   checkin_sent
   checkin_completed
   user_action
+  turn_reprompt
 }
 
 model Event {

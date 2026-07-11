@@ -10,7 +10,7 @@
     "build": "tsup src/index.ts --format cjs,esm --dts --clean",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "lint": "eslint src --ext .ts"
+    "lint": "eslint src"
   },
   "dependencies": {
     "@carememory/brief-templates": "workspace:*",
@@ -31,12 +31,15 @@
     "zod": "^3.23.0"
   },
   "devDependencies": {
+    "@eslint/js": "^9.0.0",
     "@playwright/test": "^1.61.0",
     "@types/node": "^22.0.0",
     "@vitest/coverage-v8": "^4.1.9",
+    "eslint": "^9.0.0",
     "tsup": "^8.3.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "typescript-eslint": "^8.0.0",
     "vitest": "^4.1.9"
   }
 }
