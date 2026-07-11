@@ -309,7 +309,6 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post("/dev/test-tool/api/trigger-pending-nudge", async (request: FastifyRequest<{ Body: { userId: string } }>, reply) => {
-    const { userId: _userId } = request.body;
     const outbound = await processPendingNudges(fastify.prisma, fastify.clock, { nudgeAfterMs: getNudgeAfterMs() });
     return reply.send({ triggered: true, outboundCount: outbound.length, outboundMessages: outbound });
   });
