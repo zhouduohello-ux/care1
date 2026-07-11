@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createHash } from "crypto";
 import { processInbound, handleCheckInTrigger, type EngineContext, deleteUserData, scheduleNextCheckInOffset } from "@carememory/engine";
-import { processExpiredPendingQuestions } from "../services/scheduler.js";
+import { processExpiredPendingQuestions, processPendingNudges } from "../services/scheduler.js";
 import type { InboundMessage, Platform } from "@carememory/im-core";
 import { createExportTokenFactory } from "../lib/export-token.js";
 import { loadLLMConfig } from "@carememory/engine";
@@ -306,6 +306,12 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
     const { userId } = request.body;
     await processExpiredPendingQuestions(fastify.prisma, fastify.clock.now(userId));
     return reply.send({ triggered: true });
+  });
+
+  fastify.post("/dev/test-tool/api/trigger-pending-nudge", async (request: FastifyRequest<{ Body: { userId: string } }>, reply) => {
+    const { userId: _userId } = request.body;
+    const outbound = await processPendingNudges(fastify.prisma, fastify.clock, { nudgeAfterMs: 12 * 60 * 60 * 1000 });
+    return reply.send({ triggered: true, outboundCount: outbound.length, outboundMessages: outbound });
   });
 
   fastify.post("/dev/test-tool/api/register", async (request: FastifyRequest<{ Body: { username: string; password: string } }>, reply) => {

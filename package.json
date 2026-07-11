@@ -26,7 +26,11 @@
     "test:e2e:four-option-list": "tsx tests/scenarios/run-scenario.ts tests/scenarios/four-option-list-fallback.json",
     "test:e2e:turn-manager": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-reprompt.json",
     "test:e2e:pending-timeout": "tsx tests/scenarios/run-scenario.ts tests/scenarios/pending-question-timeout.json",
+<<<<<<< HEAD
     "test:e2e:turn-manager-max": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-max-reprompts.json",
+=======
+    "test:e2e:turn-timeline": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-timeline.json",
+>>>>>>> ba6fe0b (test(e2e): turn manager full timeline scenario (reprompt -> nudge -> timeout))
     "test:e2e:staging": "tsx tests/scenarios/run-all.ts",
     "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
     "typecheck": "turbo run typecheck"
