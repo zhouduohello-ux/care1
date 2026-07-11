@@ -615,8 +615,6 @@ export async function processInbound(
     }
   }
 
-  const recentObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn?.sentAt ?? undefined);
-
   // Enter exception mode when the user reports an anomaly or medium-risk safety signal
   if (
     activeCheckIn &&
@@ -748,6 +746,7 @@ export async function processInbound(
     where: { cycleId: cycle.id },
     orderBy: { generatedAt: "desc" },
   });
+  const recentObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn?.sentAt ?? undefined);
   const plannerInput = {
     patientContext: {
       disease: cycle.disease,

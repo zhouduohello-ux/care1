@@ -1,0 +1,55 @@
+{
+  "id": "turn_manager_max_reprompts",
+  "name": "Turn Manager gives up after max reprompts and moves on",
+  "description": "After MAX_REPROMPTS failed attempts to answer a pending question, the system records a no_answer observation and asks the next check-in topic instead of looping.",
+  "user": {
+    "phoneNumber": "test_turn_manager_max"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "not sure" },
+    { "action": "send", "text": "not sure" },
+    { "action": "send", "text": "not sure" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "First reprompt contains 'didn't catch that' prefix"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "Just to confirm",
+      "description": "Second reprompt uses 'Just to confirm' prefix"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "not_contains",
+      "value": "I didn't catch that",
+      "description": "After max reprompts the system stops reprompting"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "not_contains",
+      "value": "Just to confirm",
+      "description": "After max reprompts the system stops reprompting"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "reliever",
+      "caseInsensitive": true,
+      "description": "System moves on to the reliever_use topic"
+    }
+  ]
+}
