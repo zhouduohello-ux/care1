@@ -116,6 +116,7 @@ enum EventType {
   checkin_sent
   checkin_completed
   turn_reprompt
+  nudge_sent
   user_action
 }
 
