@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/node";
 import { Job, Queue, Worker } from "bullmq";
 import type { Clock } from "../plugins/clock.js";
 import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
+import type { OutboundMessage } from "@carememory/im-core";
 
 export const SCHEDULER_QUEUE_NAME = "carememory-scheduler";
 
@@ -118,7 +119,7 @@ export async function processPendingNudges(
   prisma: PrismaClient,
   clock: Clock,
   opts: { nudgeAfterMs?: number } = {}
-) {
+): Promise<OutboundMessage[]> {
   const now = clock.now();
   const nudgeAfterMs = opts.nudgeAfterMs ?? 12 * 60 * 60 * 1000;
   const deadline = new Date(now.getTime() - nudgeAfterMs);
@@ -133,10 +134,11 @@ export async function processPendingNudges(
     include: { cycle: { include: { user: true } } },
   });
 
+  const sent: OutboundMessage[] = [];
   for (const checkIn of nudgable) {
     if (!checkIn.cycle?.user) continue;
 
-    const nudge = {
+    const nudge: OutboundMessage = {
       userId: checkIn.cycle.user.phoneNumber,
       conversationContext: { requiresSession: true, priority: "normal" as const },
       content: {
@@ -150,7 +152,10 @@ export async function processPendingNudges(
       where: { id: checkIn.id },
       data: { nudgeSentAt: now },
     });
+    sent.push(nudge);
   }
+
+  return sent;
 }
 
 export async function processDueReminders(prisma: PrismaClient, clock: Clock) {

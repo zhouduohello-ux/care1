@@ -9,7 +9,7 @@ export interface Scenario {
   description?: string;
   user?: { phoneNumber?: string };
   script: Array<{
-    action: "reset" | "load_persona" | "advance" | "send" | "reply" | "generate_brief" | "fetch_brief" | "fetch_pdf" | "trigger_expired_pending";
+    action: "reset" | "load_persona" | "advance" | "send" | "reply" | "generate_brief" | "fetch_brief" | "fetch_pdf" | "trigger_expired_pending" | "trigger_pending_nudge";
     personaId?: string;
     to?: string;
     text?: string;
@@ -134,6 +134,13 @@ export class ScenarioRunner {
     }) as Promise<{ triggered: boolean }>;
   }
 
+  private triggerPendingNudge(userId: string) {
+    return this.api("/dev/test-tool/api/trigger-pending-nudge", {
+      method: "POST",
+      body: JSON.stringify({ userId }),
+    }) as Promise<{ triggered: boolean; outboundMessages: StepResult["outboundMessages"] }>;
+  }
+
   private simulate(userId: string, text?: string, buttonId?: string) {
     return this.api("/dev/test-tool/api/simulate-message", {
       method: "POST",
@@ -210,6 +217,9 @@ export class ScenarioRunner {
         } else if (step.action === "trigger_expired_pending") {
           await this.triggerExpiredPending(userId);
           result = { step: stepNumber, action: step.action, outboundMessages: [] };
+        } else if (step.action === "trigger_pending_nudge") {
+          const data = await this.triggerPendingNudge(userId);
+          result = { step: stepNumber, action: step.action, outboundMessages: data.outboundMessages };
         } else if (step.action === "send") {
           const data = await this.simulate(userId, step.text);
           result = { step: stepNumber, action: step.action, outboundMessages: data.outboundMessages, trace: data.trace };

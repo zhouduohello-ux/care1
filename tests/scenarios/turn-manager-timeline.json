@@ -1,0 +1,43 @@
+{
+  "id": "turn_manager_timeline",
+  "name": "Turn manager full timeline - reprompt, nudge, timeout",
+  "description": "Verifies the complete turn management lifecycle: question -> off-topic reply -> reprompt -> 12h gentle nudge -> 24h silent timeout with no_answer observation.",
+  "user": {
+    "phoneNumber": "test_turn_timeline"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "I don't understand the question" },
+    { "action": "advance", "to": "next_day" },
+    { "action": "trigger_pending_nudge" },
+    { "action": "advance", "to": "next_day" },
+    { "action": "trigger_expired_pending" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "Off-topic reply triggers a reprompt"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "gentle nudge",
+      "caseInsensitive": true,
+      "description": "12h pending question nudge is sent"
+    },
+    {
+      "afterStep": 8,
+      "type": "observation",
+      "op": "exists",
+      "filter": { "category": "subjective", "value": "no_answer" },
+      "description": "24h timeout creates a no_answer observation"
+    }
+  ]
+}
