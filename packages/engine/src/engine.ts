@@ -670,7 +670,7 @@ export async function processInbound(
 
   // L5 Dialogue
   const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-  const outbound = renderMessage(userId, plannerOutput, {
+  const outbound = await renderMessage(userId, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
     locale: user.locale,
     cycleContext: {
@@ -775,7 +775,7 @@ export async function processInbound(
         safetyFlag: "none",
         updatePatientState: {},
       };
-      const briefMessage = renderMessage(userId, briefOutput, {
+      const briefMessage = await renderMessage(userId, briefOutput, {
         style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
         locale: user.locale,
         cycleContext: { briefUrl },
@@ -904,7 +904,7 @@ export async function handleCheckInTrigger(
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, cycle.userId, cycle.id, plannerOutput);
 
-  const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput, {
+  const outbound = await renderMessage(cycle.user.phoneNumber, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
     locale: cycle.user.locale,
     cycleContext: {

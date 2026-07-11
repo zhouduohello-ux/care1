@@ -1,7 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { renderMessage } from "./dialogue.js";
 import type { PlannerOutput } from "./types.js";
 import { DEFAULT_PLATFORM_CAPABILITIES, type PlatformCapability } from "@carememory/im-core";
+import type { LLMClient } from "./llm.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
   return {
@@ -30,11 +31,21 @@ const customCapability = (overrides: Partial<PlatformCapability>): PlatformCapab
   ...overrides,
 });
 
-describe("renderMessage", () => {
-  describe("safety_response", () => {
-    it("renders as urgent text", () => {
+function mockLlm(polishedText: string): LLMClient {
+  return {
+    modelName: "mock-polish",
+    complete: vi.fn().mockResolvedValue({
+      content: polishedText,
+      usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+    }),
+  };
+}
+
+describe("renderMessage", async () => {
+  describe("safety_response", async () => {
+    it("renders as urgent text", async () => {
       const output = makePlannerOutput({ type: "safety_response", purpose: "Call 999." });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.type).toBe("text");
       expect(message.content.text).toBe("Call 999.");
@@ -43,10 +54,10 @@ describe("renderMessage", () => {
     });
   });
 
-  describe("end_session", () => {
-    it("renders as normal text", () => {
+  describe("end_session", async () => {
+    it("renders as normal text", async () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "Thank you." });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.type).toBe("text");
       expect(message.content.text).toBe("Thank you.");
@@ -54,15 +65,15 @@ describe("renderMessage", () => {
     });
   });
 
-  describe("ask — single_choice", () => {
-    it("renders 2 options as buttons", () => {
+  describe("ask — single_choice", async () => {
+    it("renders 2 options as buttons", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "activity_limitation",
         expectedResponseType: "single_choice",
         options: ["activity_no", "activity_yes"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability });
 
       expect(message.content.type).toBe("buttons");
       expect(message.content.buttons).toHaveLength(2);
@@ -70,14 +81,14 @@ describe("renderMessage", () => {
       expect(message.content.buttons?.[1]).toEqual({ id: "activity_yes", title: "Yes, limited" });
     });
 
-    it("renders 4 options as list under WhatsApp (max 3 buttons)", () => {
+    it("renders 4 options as list under WhatsApp (max 3 buttons)", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "nighttime_symptoms",
         expectedResponseType: "single_choice",
         options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list).toHaveLength(4);
@@ -85,20 +96,20 @@ describe("renderMessage", () => {
       expect(message.content.list?.[3]).toEqual({ id: "night_woke_up", title: "Woke me up" });
     });
 
-    it("renders 4 options as buttons under LINE (max 4 buttons)", () => {
+    it("renders 4 options as buttons under LINE (max 4 buttons)", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "nighttime_symptoms",
         expectedResponseType: "single_choice",
         options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
       });
-      const message = renderMessage("user_1", output, { capability: lineCapability });
+      const message = await renderMessage("user_1", output, { capability: lineCapability });
 
       expect(message.content.type).toBe("buttons");
       expect(message.content.buttons).toHaveLength(4);
     });
 
-    it("falls back to list when a button title exceeds the platform limit", () => {
+    it("falls back to list when a button title exceeds the platform limit", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
@@ -106,41 +117,41 @@ describe("renderMessage", () => {
         options: ["this_is_long", "also_too_long"],
       });
       const capability = customCapability({ maxButtons: 3, buttonTitleMaxLength: 5 });
-      const message = renderMessage("user_1", output, { capability });
+      const message = await renderMessage("user_1", output, { capability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list).toHaveLength(2);
     });
 
-    it("falls back to enumerated text when buttons and list are unavailable", () => {
+    it("falls back to enumerated text when buttons and list are unavailable", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "nighttime_symptoms",
         expectedResponseType: "single_choice",
         options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
       });
-      const message = renderMessage("user_1", output, { capability: smsCapability });
+      const message = await renderMessage("user_1", output, { capability: smsCapability });
 
       expect(message.content.type).toBe("text");
       expect(message.content.text).toContain("None (reply night_none)");
       expect(message.content.text).toContain("Woke me up (reply night_woke_up)");
     });
 
-    it("falls back to options IDs for unknown topics", () => {
+    it("falls back to options IDs for unknown topics", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
         expectedResponseType: "single_choice",
         options: ["opt_a", "opt_b"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability });
 
       expect(message.content.type).toBe("buttons");
       expect(message.content.buttons?.[0]).toEqual({ id: "opt_a", title: "opt_a" });
       expect(message.content.buttons?.[1]).toEqual({ id: "opt_b", title: "opt_b" });
     });
 
-    it("falls back to list when any button title would exceed the platform limit", () => {
+    it("falls back to list when any button title would exceed the platform limit", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
@@ -148,7 +159,7 @@ describe("renderMessage", () => {
         options: ["short", "this_option_is_too_long_for_a_button"],
       });
       const capability = customCapability({ maxButtons: 3, buttonTitleMaxLength: 10 });
-      const message = renderMessage("user_1", output, { capability });
+      const message = await renderMessage("user_1", output, { capability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list).toHaveLength(2);
@@ -156,58 +167,58 @@ describe("renderMessage", () => {
     });
   });
 
-  describe("ask — scale", () => {
-    it("renders scale as 5 buttons when supported", () => {
+  describe("ask — scale", async () => {
+    it("renders scale as 5 buttons when supported", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "severity",
         expectedResponseType: "scale",
       });
       const capability = customCapability({ maxButtons: 5 });
-      const message = renderMessage("user_1", output, { capability });
+      const message = await renderMessage("user_1", output, { capability });
 
       expect(message.content.type).toBe("buttons");
       expect(message.content.buttons).toHaveLength(5);
       expect(message.content.buttons?.[0]).toEqual({ id: "1", title: "1" });
     });
 
-    it("renders scale as list when buttons are limited", () => {
+    it("renders scale as list when buttons are limited", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "severity",
         expectedResponseType: "scale",
       });
       const capability = customCapability({ maxButtons: 3 });
-      const message = renderMessage("user_1", output, { capability });
+      const message = await renderMessage("user_1", output, { capability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list).toHaveLength(5);
     });
   });
 
-  describe("ask — multi_select", () => {
-    it("renders multi_select as list when supported", () => {
+  describe("ask — multi_select", async () => {
+    it("renders multi_select as list when supported", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
         expectedResponseType: "multi_select",
         options: ["pollen", "dust", "exercise", "cold_air"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list).toHaveLength(4);
       expect(message.content.text).toContain("Reply with all that apply");
     });
 
-    it("renders multi_select as enumerated text when list is unavailable", () => {
+    it("renders multi_select as enumerated text when list is unavailable", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
         expectedResponseType: "multi_select",
         options: ["pollen", "dust", "exercise", "cold_air"],
       });
-      const message = renderMessage("user_1", output, { capability: smsCapability });
+      const message = await renderMessage("user_1", output, { capability: smsCapability });
 
       expect(message.content.type).toBe("text");
       expect(message.content.text).toContain("Reply with all that apply");
@@ -215,14 +226,14 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("cold_air");
     });
 
-    it("uses known labels for multi_select topics", () => {
+    it("uses known labels for multi_select topics", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "activity_limitation",
         expectedResponseType: "multi_select",
         options: ["activity_no", "activity_yes"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list?.[0].title).toBe("No limitation");
@@ -230,50 +241,50 @@ describe("renderMessage", () => {
     });
   });
 
-  describe("ask — text", () => {
-    it("renders text question", () => {
+  describe("ask — text", async () => {
+    it("renders text question", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "exception_clarification",
         expectedResponseType: "text",
       });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.type).toBe("text");
       expect(message.content.text).toBe("Test question?");
     });
   });
 
-  describe("inform / remind / generate_brief", () => {
+  describe("inform / remind / generate_brief", async () => {
     it.each([
       ["inform"],
       ["remind"],
       ["generate_brief"],
-    ] as const)("renders %s as text fallback", (type) => {
+    ] as const)("renders %s as text fallback", async (type) => {
       const output = makePlannerOutput({ type, purpose: "Heads up." });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.type).toBe("text");
       expect(message.content.text).toBe("Heads up.");
     });
   });
 
-  describe("default capability", () => {
-    it("uses WhatsApp capability when none is provided", () => {
+  describe("default capability", async () => {
+    it("uses WhatsApp capability when none is provided", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "nighttime_symptoms",
         expectedResponseType: "single_choice",
         options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
       });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.type).toBe("list");
     });
   });
 
-  describe("truncation", () => {
-    it("truncates list titles that exceed the limit", () => {
+  describe("truncation", async () => {
+    it("truncates list titles that exceed the limit", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
@@ -281,7 +292,7 @@ describe("renderMessage", () => {
         options: ["this_is_a_very_long_option_id"],
       });
       const capability = customCapability({ maxButtons: 0, listMaxRows: 10, listTitleMaxLength: 10 });
-      const message = renderMessage("user_1", output, { capability });
+      const message = await renderMessage("user_1", output, { capability });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list?.[0].title.length).toBeLessThanOrEqual(10);
@@ -289,72 +300,72 @@ describe("renderMessage", () => {
     });
   });
 
-  describe("conversation style", () => {
-    it("v1 leaves text unchanged", () => {
+  describe("conversation style", async () => {
+    it("v1 leaves text unchanged", async () => {
       const output = makePlannerOutput({
         type: "end_session",
         purpose: "Thank you for your updates. Your Disease Card will be updated shortly.",
       });
-      const message = renderMessage("user_1", output, { style: "v1" });
+      const message = await renderMessage("user_1", output, { style: "v1" });
 
       expect(message.content.text).toBe("Thank you for your updates. Your Disease Card will be updated shortly.");
     });
 
-    it("v2 restyles closing messages", () => {
+    it("v2 restyles closing messages", async () => {
       const output = makePlannerOutput({
         type: "end_session",
         purpose: "Thank you for your updates. Your Disease Card will be updated shortly.",
       });
-      const message = renderMessage("user_1", output, { style: "v2" });
+      const message = await renderMessage("user_1", output, { style: "v2" });
 
       expect(message.content.text).toContain("Thanks for the update");
       expect(message.content.text).toContain("I'll update your Disease Card now");
     });
 
-    it("v2 restyles question prompts", () => {
+    it("v2 restyles question prompts", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "exception_clarification",
         expectedResponseType: "text",
         purpose: "Please tell me more about what happened.",
       });
-      const message = renderMessage("user_1", output, { style: "v2" });
+      const message = await renderMessage("user_1", output, { style: "v2" });
 
       expect(message.content.text).not.toContain("Please tell me");
       expect(message.content.text.toLowerCase()).toContain("could you");
     });
 
-    it("v2 adds empathy to safety responses without removing safety instruction", () => {
+    it("v2 adds empathy to safety responses without removing safety instruction", async () => {
       const output = makePlannerOutput({
         type: "safety_response",
         purpose: "If you're having severe breathing problems, call 999 or follow your asthma action plan.",
       });
-      const message = renderMessage("user_1", output, { style: "v2" });
+      const message = await renderMessage("user_1", output, { style: "v2" });
 
       expect(message.content.text).toContain("I'm sorry you're struggling");
       expect(message.content.text).toContain("call 999");
     });
 
-    it("preserves safety instruction length dominance in v2 safety responses", () => {
+    it("preserves safety instruction length dominance in v2 safety responses", async () => {
       const output = makePlannerOutput({
         type: "safety_response",
         purpose: "You reported a possible reaction. Please contact your GP or pharmacist, or call 111 if it feels serious.",
       });
-      const message = renderMessage("user_1", output, { style: "v2" });
+      const message = await renderMessage("user_1", output, { style: "v2" });
 
       expect(message.content.text).toContain("Thanks for flagging this");
       expect(message.content.text).toContain("contact your GP");
     });
   });
 
-  describe("generate_brief", () => {
-    it("renders brief-ready message with URL when briefUrl is provided", () => {
+  describe("generate_brief", async () => {
+    it("renders brief-ready message with URL when briefUrl is provided", async () => {
       const output = makePlannerOutput({
         type: "generate_brief",
         topic: "brief_ready",
         purpose: "Your visit brief is ready.",
       });
-      const message = renderMessage("user_1", output, {
+      const message = await renderMessage("user_1", output, {
         cycleContext: { briefUrl: "https://carememory.app/b/123?t=abc" },
       });
 
@@ -363,29 +374,29 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("Asthma Visit Brief");
     });
 
-    it("falls back to purpose when briefUrl is missing", () => {
+    it("falls back to purpose when briefUrl is missing", async () => {
       const output = makePlannerOutput({
         type: "generate_brief",
         topic: "brief_ready",
         purpose: "Your visit brief is ready.",
       });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.text).toBe("Your visit brief is ready.");
     });
   });
 
-  describe("cycle context closing messages", () => {
-    it("uses default purpose when no cycle context is provided", () => {
+  describe("cycle context closing messages", async () => {
+    it("uses default purpose when no cycle context is provided", async () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
-      const message = renderMessage("user_1", output);
+      const message = await renderMessage("user_1", output);
 
       expect(message.content.text).toBe("Thanks for checking in.");
     });
 
-    it("generates 4-week plan completion message", () => {
+    it("generates 4-week plan completion message", async () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
-      const message = renderMessage("user_1", output, {
+      const message = await renderMessage("user_1", output, {
         cycleContext: { cycleType: "PLAN_4_WEEK", cycleDay: 28, briefReady: true },
       });
 
@@ -393,9 +404,9 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("CONTINUE");
     });
 
-    it("generates 7-day trial completion message with Brief mention", () => {
+    it("generates 7-day trial completion message with Brief mention", async () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
-      const message = renderMessage("user_1", output, {
+      const message = await renderMessage("user_1", output, {
         cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 7, briefReady: true },
       });
 
@@ -403,9 +414,9 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("Disease Card and Brief are ready");
     });
 
-    it("uses default purpose before cycle end threshold", () => {
+    it("uses default purpose before cycle end threshold", async () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "All questions answered." });
-      const message = renderMessage("user_1", output, {
+      const message = await renderMessage("user_1", output, {
         cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 3, briefReady: true },
       });
 
@@ -413,52 +424,52 @@ describe("renderMessage", () => {
     });
   });
 
-  describe("locale support", () => {
-    it("uses Welsh (cy-GB) labels when locale is set", () => {
+  describe("locale support", async () => {
+    it("uses Welsh (cy-GB) labels when locale is set", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "nighttime_symptoms",
         expectedResponseType: "single_choice",
         options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability, locale: "cy-GB" });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability, locale: "cy-GB" });
 
       expect(message.content.type).toBe("list");
       expect(message.content.list?.[0].title).toBe("Dim");
       expect(message.content.list?.[3].title).toBe("Deffroais i");
     });
 
-    it("falls back to en-GB for unknown locale", () => {
+    it("falls back to en-GB for unknown locale", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "nighttime_symptoms",
         expectedResponseType: "single_choice",
         options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability, locale: "xx-XX" });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability, locale: "xx-XX" });
 
       expect(message.content.list?.[0].title).toBe("None");
     });
 
-    it("uses Welsh multi-select footer", () => {
+    it("uses Welsh multi-select footer", async () => {
       const output = makePlannerOutput({
         type: "ask",
         topic: "unknown_topic",
         expectedResponseType: "multi_select",
         options: ["a", "b"],
       });
-      const message = renderMessage("user_1", output, { capability: whatsappCapability, locale: "cy-GB" });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability, locale: "cy-GB" });
 
       expect(message.content.text).toContain("Atebwch gyda'r hyn sy'n berthnasol.");
     });
 
-    it("uses Welsh brief-ready template", () => {
+    it("uses Welsh brief-ready template", async () => {
       const output = makePlannerOutput({
         type: "generate_brief",
         topic: "brief_ready",
         purpose: "Your visit brief is ready.",
       });
-      const message = renderMessage("user_1", output, {
+      const message = await renderMessage("user_1", output, {
         locale: "cy-GB",
         cycleContext: { briefUrl: "https://example.com/b/123" },
       });
@@ -467,15 +478,85 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("https://example.com/b/123");
     });
 
-    it("uses Welsh cycle closing message", () => {
+    it("uses Welsh cycle closing message", async () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "Thanks." });
-      const message = renderMessage("user_1", output, {
+      const message = await renderMessage("user_1", output, {
         locale: "cy-GB",
         cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 7, briefReady: true },
       });
 
       expect(message.content.text).toContain("treial 7 diwrnod");
       expect(message.content.text).toContain("Cerdyn Clefyd");
+    });
+  });
+
+  describe("LLM polish", async () => {
+    it("polishes text message when enabled and llmClient is provided", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thank you for your updates." });
+      const llmClient = mockLlm("Thanks so much for the update — it really helps.");
+      const message = await renderMessage("user_1", output, {
+        enableLlmPolish: true,
+        llmClient,
+      });
+
+      expect(message.content.text).toBe("Thanks so much for the update — it really helps.");
+      expect(llmClient.complete).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not polish when disabled", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thank you for your updates." });
+      const llmClient = mockLlm("Polished text.");
+      const message = await renderMessage("user_1", output, {
+        enableLlmPolish: false,
+        llmClient,
+      });
+
+      expect(message.content.text).toBe("Thank you for your updates.");
+      expect(llmClient.complete).not.toHaveBeenCalled();
+    });
+
+    it("does not polish when llmClient is missing", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thank you for your updates." });
+      const message = await renderMessage("user_1", output, { enableLlmPolish: true });
+
+      expect(message.content.text).toBe("Thank you for your updates.");
+    });
+
+    it("does not polish non-text content (buttons)", async () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "activity_limitation",
+        expectedResponseType: "single_choice",
+        options: ["activity_no", "activity_yes"],
+      });
+      const llmClient = mockLlm("Polished text.");
+      const message = await renderMessage("user_1", output, {
+        capability: whatsappCapability,
+        enableLlmPolish: true,
+        llmClient,
+      });
+
+      expect(message.content.type).toBe("buttons");
+      expect(llmClient.complete).not.toHaveBeenCalled();
+    });
+
+    it("calls onLlmCall audit callback when polishing", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thank you." });
+      const llmClient = mockLlm("Thanks!");
+      const onLlmCall = vi.fn();
+      await renderMessage("user_1", output, {
+        enableLlmPolish: true,
+        llmClient,
+        onLlmCall,
+      });
+
+      expect(onLlmCall).toHaveBeenCalledTimes(1);
+      expect(onLlmCall).toHaveBeenCalledWith(
+        "mock-polish",
+        expect.any(Array),
+        "Thanks!",
+        { promptTokens: 10, completionTokens: 5, totalTokens: 15 }
+      );
     });
   });
 });

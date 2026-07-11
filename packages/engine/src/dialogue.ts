@@ -22,49 +22,62 @@ export interface RenderOptions {
   style?: ConversationStyle;
   cycleContext?: CycleContext;
   locale?: string;
+  /** When true and llmClient is provided, text messages are passed through an LLM polish step. */
+  enableLlmPolish?: boolean;
+  llmClient?: import("./llm.js").LLMClient;
+  onLlmCall?: import("./perception.js").LlmAuditCallback;
 }
 
-export function renderMessage(
+export async function renderMessage(
   userId: string,
   plannerOutput: PlannerOutput,
   options: RenderOptions = {}
-): OutboundMessage {
+): Promise<OutboundMessage> {
   const action = plannerOutput.nextAction;
   const capability = options.capability ?? DEFAULT_PLATFORM_CAPABILITIES.whatsapp;
   const locale = getLocale(options.locale);
 
   if (action.type === "safety_response") {
-    return {
-      userId,
-      conversationContext: { requiresSession: true, priority: "urgent" },
-      content: {
-        type: "text",
-        text: styleText(action.purpose, options.style ?? "v1", "safety", locale),
+    return polishIfEnabled(
+      {
+        userId,
+        conversationContext: { requiresSession: true, priority: "urgent" },
+        content: {
+          type: "text",
+          text: styleText(action.purpose, options.style ?? "v1", "safety", locale),
+        },
       },
-    };
+      { intent: "safety", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
+    );
   }
 
   if (action.type === "end_session") {
     const closingText = resolveClosingText(action.purpose, locale, options.cycleContext);
-    return {
-      userId,
-      conversationContext: { requiresSession: true, priority: "normal" },
-      content: {
-        type: "text",
-        text: styleText(closingText, options.style ?? "v1", "closing", locale),
+    return polishIfEnabled(
+      {
+        userId,
+        conversationContext: { requiresSession: true, priority: "normal" },
+        content: {
+          type: "text",
+          text: styleText(closingText, options.style ?? "v1", "closing", locale),
+        },
       },
-    };
+      { intent: "closing", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
+    );
   }
 
   if (action.type === "generate_brief") {
-    return {
-      userId,
-      conversationContext: { requiresSession: true, priority: "normal" },
-      content: {
-        type: "text",
-        text: resolveBriefReadyText(action.purpose, locale, options.cycleContext?.briefUrl),
+    return polishIfEnabled(
+      {
+        userId,
+        conversationContext: { requiresSession: true, priority: "normal" },
+        content: {
+          type: "text",
+          text: resolveBriefReadyText(action.purpose, locale, options.cycleContext?.briefUrl),
+        },
       },
-    };
+      { intent: "inform", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
+    );
   }
 
   if (action.type === "ask" && action.expectedResponseType === "scale") {
@@ -96,14 +109,23 @@ export function renderMessage(
     );
   }
 
-  return {
-    userId,
-    conversationContext: { requiresSession: true, priority: "normal" },
-    content: {
-      type: "text",
-      text: styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform", locale),
+  return polishIfEnabled(
+    {
+      userId,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "text",
+        text: styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform", locale),
+      },
     },
-  };
+    {
+      intent: action.type === "ask" ? "question" : "inform",
+      locale,
+      llmClient: options.llmClient,
+      onLlmCall: options.onLlmCall,
+      enabled: options.enableLlmPolish,
+    }
+  );
 }
 
 function renderScaleQuestion(
@@ -288,4 +310,34 @@ function resolveBriefReadyText(purpose: string, locale: DialogueLocale, briefUrl
     return formatBriefReadyMessage(locale, briefUrl);
   }
   return purpose || locale.briefReadyTemplate.replace(/\{url\}/g, "");
+}
+
+interface PolishIfEnabledOptions {
+  intent?: "safety" | "closing" | "question" | "inform";
+  locale: DialogueLocale;
+  llmClient?: import("./llm.js").LLMClient;
+  onLlmCall?: import("./perception.js").LlmAuditCallback;
+  enabled?: boolean;
+}
+
+async function polishIfEnabled(
+  message: OutboundMessage,
+  options: PolishIfEnabledOptions
+): Promise<OutboundMessage> {
+  if (!options.enabled || !options.llmClient || message.content.type !== "text") {
+    return message;
+  }
+
+  const { polishMessage } = await import("./dialogue-llm-polish.js");
+  const polishedText = await polishMessage(message.content.text, {
+    llmClient: options.llmClient,
+    onLlmCall: options.onLlmCall,
+    locale: options.locale,
+    intent: options.intent,
+  });
+
+  return {
+    ...message,
+    content: { ...message.content, text: polishedText },
+  };
 }
