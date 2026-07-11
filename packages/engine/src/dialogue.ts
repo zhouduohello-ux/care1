@@ -7,6 +7,7 @@ export interface CycleContext {
   cycleType?: "TRIAL_7_DAY" | "PLAN_4_WEEK";
   cycleDay?: number;
   briefReady?: boolean;
+  briefUrl?: string;
 }
 
 export interface RenderOptions {
@@ -43,6 +44,17 @@ export function renderMessage(
       content: {
         type: "text",
         text: styleText(closingText, options.style ?? "v1", "closing"),
+      },
+    };
+  }
+
+  if (action.type === "generate_brief") {
+    return {
+      userId,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "text",
+        text: resolveBriefReadyText(action.purpose, options.cycleContext?.briefUrl),
       },
     };
   }
@@ -208,4 +220,11 @@ function resolveClosingText(purpose: string, cycleContext?: CycleContext): strin
   }
 
   return purpose;
+}
+
+function resolveBriefReadyText(purpose: string, briefUrl?: string): string {
+  if (briefUrl) {
+    return `Your Asthma Visit Brief is ready. You can view it here: ${briefUrl}. Please bring it to your appointment or share it with your care team.`;
+  }
+  return purpose || "Your visit brief is ready.";
 }

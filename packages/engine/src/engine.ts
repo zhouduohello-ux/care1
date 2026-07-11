@@ -759,6 +759,38 @@ export async function processInbound(
       data: { webUrl: `/b/${brief.id}?t=${briefAccessToken}` },
     });
 
+    // Send a follow-up message with the Brief link when the cycle is completing.
+    if (context.webBaseUrl) {
+      const briefUrl = `${context.webBaseUrl}/b/${brief.id}?t=${briefAccessToken}`;
+      const briefOutput: PlannerOutput = {
+        reasoning: "Brief generated. Sending link to patient.",
+        sessionObjective: "Share visit brief link with patient.",
+        nextAction: {
+          type: "generate_brief",
+          topic: "brief_ready",
+          purpose: "Your visit brief is ready.",
+          budgetCost: 0,
+        },
+        safetyFlag: "none",
+        updatePatientState: {},
+      };
+      const briefMessage = renderMessage(userId, briefOutput, {
+        style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+        cycleContext: { briefUrl },
+      });
+      const { messages: safeBriefMessages } = safetyWrapWithSummary(userId, [briefMessage]);
+      await saveOutboundMessages(
+        prisma,
+        user.id,
+        safeBriefMessages,
+        cycle.id,
+        new Date(),
+        inboundEventId,
+        perception.traceId
+      );
+      messages.push(...safeBriefMessages);
+    }
+
     // For 4-week plans that have reached ~28 days, or 7-day trials that have
     // reached ~7 days, mark the cycle as COMPLETED. L5 has already generated
     // the appropriate closing message via cycleContext.

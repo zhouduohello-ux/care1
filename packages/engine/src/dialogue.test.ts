@@ -302,6 +302,34 @@ describe("renderMessage", () => {
     });
   });
 
+  describe("generate_brief", () => {
+    it("renders brief-ready message with URL when briefUrl is provided", () => {
+      const output = makePlannerOutput({
+        type: "generate_brief",
+        topic: "brief_ready",
+        purpose: "Your visit brief is ready.",
+      });
+      const message = renderMessage("user_1", output, {
+        cycleContext: { briefUrl: "https://carememory.app/b/123?t=abc" },
+      });
+
+      expect(message.content.type).toBe("text");
+      expect(message.content.text).toContain("https://carememory.app/b/123?t=abc");
+      expect(message.content.text).toContain("Asthma Visit Brief");
+    });
+
+    it("falls back to purpose when briefUrl is missing", () => {
+      const output = makePlannerOutput({
+        type: "generate_brief",
+        topic: "brief_ready",
+        purpose: "Your visit brief is ready.",
+      });
+      const message = renderMessage("user_1", output);
+
+      expect(message.content.text).toBe("Your visit brief is ready.");
+    });
+  });
+
   describe("cycle context closing messages", () => {
     it("uses default purpose when no cycle context is provided", () => {
       const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
