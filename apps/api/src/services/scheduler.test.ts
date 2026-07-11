@@ -1,8 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { PrismaClient } from "@carememory/db";
 import type { Job } from "bullmq";
 import type { Redis } from "ioredis";
-import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME } from "./scheduler.js";
+import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs, getPendingTimeoutMs } from "./scheduler.js";
 
 vi.mock("@carememory/engine", () => ({
   handleCheckInTrigger: vi.fn(async () => []),
@@ -274,6 +274,39 @@ describe("scheduler", () => {
       await expect(processor({ name: "unknown", data: {}, id: "job-3" } as unknown as Job)).rejects.toThrow(
         "Unknown scheduler job name: unknown"
       );
+    });
+  });
+
+  describe("turn management config", () => {
+    const originalEnv = process.env;
+
+    beforeEach(() => {
+      process.env = { ...originalEnv };
+      delete process.env.PENDING_QUESTION_NUDGE_AFTER_MS;
+      delete process.env.PENDING_QUESTION_TIMEOUT_MS;
+    });
+
+    afterEach(() => {
+      process.env = originalEnv;
+    });
+
+    it("returns default nudge and timeout values", () => {
+      expect(getNudgeAfterMs()).toBe(12 * 60 * 60 * 1000);
+      expect(getPendingTimeoutMs()).toBe(24 * 60 * 60 * 1000);
+    });
+
+    it("reads custom values from environment variables", () => {
+      process.env.PENDING_QUESTION_NUDGE_AFTER_MS = "3600000";
+      process.env.PENDING_QUESTION_TIMEOUT_MS = "7200000";
+      expect(getNudgeAfterMs()).toBe(3600000);
+      expect(getPendingTimeoutMs()).toBe(7200000);
+    });
+
+    it("falls back to defaults for invalid environment values", () => {
+      process.env.PENDING_QUESTION_NUDGE_AFTER_MS = "not-a-number";
+      process.env.PENDING_QUESTION_TIMEOUT_MS = "-1";
+      expect(getNudgeAfterMs()).toBe(12 * 60 * 60 * 1000);
+      expect(getPendingTimeoutMs()).toBe(24 * 60 * 60 * 1000);
     });
   });
 });

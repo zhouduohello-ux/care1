@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createHash } from "crypto";
 import { processInbound, handleCheckInTrigger, type EngineContext, deleteUserData, scheduleNextCheckInOffset } from "@carememory/engine";
-import { processExpiredPendingQuestions, processPendingNudges } from "../services/scheduler.js";
+import { processExpiredPendingQuestions, processPendingNudges, getNudgeAfterMs, getPendingTimeoutMs } from "../services/scheduler.js";
 import type { InboundMessage, Platform } from "@carememory/im-core";
 import { createExportTokenFactory } from "../lib/export-token.js";
 import { loadLLMConfig } from "@carememory/engine";
@@ -284,13 +284,13 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
 
   fastify.post("/dev/test-tool/api/trigger-expired-pending", async (request: FastifyRequest<{ Body: { userId: string } }>, reply) => {
     const { userId } = request.body;
-    await processExpiredPendingQuestions(fastify.prisma, fastify.clock.now(userId));
+    await processExpiredPendingQuestions(fastify.prisma, fastify.clock.now(userId), { timeoutMs: getPendingTimeoutMs() });
     return reply.send({ triggered: true });
   });
 
   fastify.post("/dev/test-tool/api/trigger-pending-nudge", async (request: FastifyRequest<{ Body: { userId: string } }>, reply) => {
     const { userId: _userId } = request.body;
-    const outbound = await processPendingNudges(fastify.prisma, fastify.clock, { nudgeAfterMs: 12 * 60 * 60 * 1000 });
+    const outbound = await processPendingNudges(fastify.prisma, fastify.clock, { nudgeAfterMs: getNudgeAfterMs() });
     return reply.send({ triggered: true, outboundCount: outbound.length, outboundMessages: outbound });
   });
 

@@ -7,6 +7,28 @@ import type { Clock } from "../plugins/clock.js";
 import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
 import type { OutboundMessage } from "@carememory/im-core";
 
+function parseMsEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed) || parsed <= 0) {
+    console.warn(`[scheduler] Invalid ${name}="${raw}"; using fallback ${fallback}`);
+    return fallback;
+  }
+  return parsed;
+}
+
+export const DEFAULT_NUDGE_AFTER_MS = 12 * 60 * 60 * 1000;
+export const DEFAULT_PENDING_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+
+export function getNudgeAfterMs(): number {
+  return parseMsEnv("PENDING_QUESTION_NUDGE_AFTER_MS", DEFAULT_NUDGE_AFTER_MS);
+}
+
+export function getPendingTimeoutMs(): number {
+  return parseMsEnv("PENDING_QUESTION_TIMEOUT_MS", DEFAULT_PENDING_TIMEOUT_MS);
+}
+
 export const SCHEDULER_QUEUE_NAME = "carememory-scheduler";
 
 export type SchedulerJobName = "scan-checkins" | "scan-reminders" | "scan-expired-pending" | "scan-pending-nudge";
@@ -59,7 +81,7 @@ export async function processExpiredPendingQuestions(
   now: Date,
   opts: { timeoutMs?: number } = {}
 ) {
-  const timeoutMs = opts.timeoutMs ?? 24 * 60 * 60 * 1000;
+  const timeoutMs = opts.timeoutMs ?? getPendingTimeoutMs();
   const deadline = new Date(now.getTime() - timeoutMs);
 
   const expired = await prisma.checkIn.findMany({
@@ -121,7 +143,7 @@ export async function processPendingNudges(
   opts: { nudgeAfterMs?: number } = {}
 ): Promise<OutboundMessage[]> {
   const now = clock.now();
-  const nudgeAfterMs = opts.nudgeAfterMs ?? 12 * 60 * 60 * 1000;
+  const nudgeAfterMs = opts.nudgeAfterMs ?? getNudgeAfterMs();
   const deadline = new Date(now.getTime() - nudgeAfterMs);
 
   const nudgable = await prisma.checkIn.findMany({
