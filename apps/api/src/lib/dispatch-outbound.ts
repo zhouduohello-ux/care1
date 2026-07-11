@@ -1,10 +1,8 @@
 import crypto from "node:crypto";
 import { Prisma, type PrismaClient } from "@carememory/db";
 import type { OutboundMessage } from "@carememory/im-core";
-import { WHATSAPP_TEMPLATES, selectTemplate, buildTemplateVariables } from "@carememory/im-whatsapp";
+import { selectTemplate, buildTemplateVariables } from "@carememory/im-whatsapp";
 import { sendOutboundMessages } from "./outbound-sender.js";
-
-const SESSION_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 function makeIdempotencyKey(message: OutboundMessage, now: Date): string {
   const hash = crypto
@@ -45,7 +43,6 @@ export async function dispatchOutboundMessages(
 
     if (!windowOpen && message.content.type !== "template") {
       const templateKey = selectTemplate(message);
-      const template = WHATSAPP_TEMPLATES[templateKey];
       const templateVariables = buildTemplateVariables(templateKey, message, {
         nickname: user?.nickname,
         firstName: user?.nickname,
