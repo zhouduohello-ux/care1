@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
+import { Prisma } from "@carememory/db";
 import { exportUserData, deleteUserData, getBucket } from "@carememory/engine";
 
 function getAdminKey(): string | undefined {
@@ -36,6 +37,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       llmCallCount,
       exceptionToday,
       exceptionWeek,
+      pendingQuestions,
+      reprompts24h,
+      noAnswers24h,
+      timeouts24h,
+      nudges24h,
     ] = await Promise.all([
       fastify.prisma.user.count(),
       fastify.prisma.cycle.count(),
@@ -50,6 +56,25 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       }),
       fastify.prisma.checkIn.count({
         where: { status: "EXCEPTION", completedAt: { gte: sevenDaysAgo } },
+      }),
+      fastify.prisma.checkIn.count({
+        where: { status: "SENT", pendingQuestion: { not: Prisma.JsonNull } },
+      }),
+      fastify.prisma.event.count({
+        where: { type: "turn_reprompt", timestamp: { gte: oneDayAgo } },
+      }),
+      fastify.prisma.observation.count({
+        where: { category: "subjective", value: { equals: "no_answer" }, timestamp: { gte: oneDayAgo } },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "state_updated",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["reason"], equals: "pending_question_expired" },
+        },
+      }),
+      fastify.prisma.checkIn.count({
+        where: { nudgeSentAt: { gte: oneDayAgo } },
       }),
     ]);
 
@@ -68,6 +93,11 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       },
       { prompt: 0, completion: 0, total: 0 }
     );
+
+    const repromptAvg = await fastify.prisma.checkIn.aggregate({
+      where: { status: "SENT" },
+      _avg: { repromptCount: true },
+    });
 
     const recentOutbound = await fastify.prisma.event.findMany({
       where: { type: "outbound_message", timestamp: { gte: sevenDaysAgo } },
@@ -105,6 +135,14 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         exceptionsToday: exceptionToday,
         exceptionsThisWeek: exceptionWeek,
         failedOutbound24h,
+      },
+      turnManager: {
+        pendingQuestions,
+        reprompts24h,
+        avgReprompts: repromptAvg._avg.repromptCount ?? 0,
+        noAnswers24h,
+        timeouts24h,
+        nudges24h,
       },
       llmTokens: tokenTotals,
       experimentAssignments,

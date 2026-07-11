@@ -30,11 +30,30 @@ function makePrismaStub() {
       findMany: vi.fn(async () => [{ id: "user_1" }, { id: "user_2" }]),
     },
     cycle: { count: vi.fn(async () => 5) },
-    checkIn: { count: vi.fn(async () => 20) },
-    observation: { count: vi.fn(async () => 100) },
+    checkIn: {
+      count: vi.fn(async (args?: { where?: Record<string, unknown> }) => {
+        if (args?.where?.status === "SENT" && args?.where?.pendingQuestion) return 3;
+        if (args?.where?.nudgeSentAt) return 1;
+        return 20;
+      }),
+      aggregate: vi.fn(async () => ({ _avg: { repromptCount: 0.5 } })),
+    },
+    observation: {
+      count: vi.fn(async (args?: { where?: Record<string, unknown> }) => {
+        if (
+          args?.where?.category === "subjective" &&
+          (args?.where?.value as Record<string, unknown>)?.equals === "no_answer"
+        ) {
+          return 4;
+        }
+        return 100;
+      }),
+    },
     event: {
       count: vi.fn(async (args?: { where?: Record<string, unknown> }) => {
         if (args?.where?.type === "llm_call") return 7;
+        if (args?.where?.type === "turn_reprompt") return 5;
+        if (args?.where?.type === "state_updated") return 2;
         return 200;
       }),
       findMany: vi.fn(async (args?: { where?: Record<string, unknown>; select?: Record<string, unknown> }) => {
@@ -124,6 +143,14 @@ describe("admin routes", () => {
     expect(body.llmTokens).toMatchObject({ prompt: 300, completion: 150, total: 450 });
     expect(body.experimentAssignments).toHaveProperty("checkin_frequency");
     expect(body.experimentAssignments).toHaveProperty("conversation_style");
+    expect(body.turnManager).toMatchObject({
+      pendingQuestions: 3,
+      reprompts24h: 5,
+      avgReprompts: 0.5,
+      noAnswers24h: 4,
+      timeouts24h: 2,
+      nudges24h: 1,
+    });
   });
 
   it("exports user data as JSON attachment", async () => {
