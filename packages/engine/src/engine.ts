@@ -1058,21 +1058,39 @@ export async function handleCheckInTrigger(
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, cycle.userId, cycle.id, plannerOutput);
 
-  const outbound = await renderMessage(cycle.user.phoneNumber, plannerOutput, {
-    style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
-    locale: cycle.user.locale,
-    cycleContext: {
-      cycleType: cycle.type,
-      cycleDay: plannerInput.patientContext.cycleDay,
-      briefReady: true,
-    },
-    outOfSession: !isSessionOpen(cycle.user, context.now),
-    templateResolver: context.templateResolver,
-    templateContext: {
-      nickname: cycle.user.nickname ?? undefined,
-      firstName: cycle.user.nickname ?? undefined,
-    },
-  });
+  let outbound: OutboundMessage;
+  try {
+    outbound = await renderMessage(cycle.user.phoneNumber, plannerOutput, {
+      style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+      locale: cycle.user.locale,
+      cycleContext: {
+        cycleType: cycle.type,
+        cycleDay: plannerInput.patientContext.cycleDay,
+        briefReady: true,
+      },
+      outOfSession: !isSessionOpen(cycle.user, context.now),
+      templateResolver: context.templateResolver,
+      templateContext: {
+        nickname: cycle.user.nickname ?? undefined,
+        firstName: cycle.user.nickname ?? undefined,
+      },
+    });
+  } catch (err) {
+    console.error("L5 render failed in handleCheckInTrigger, falling back to safe message", {
+      userId: cycle.user.phoneNumber,
+      cycleId: cycle.id,
+      nextAction: plannerOutput.nextAction,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    outbound = {
+      userId: cycle.user.phoneNumber,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "text",
+        text: "I'm sorry, I couldn't prepare your check-in right now. Please send START ASTHMA when you're ready to try again.",
+      },
+    };
+  }
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
   await saveOutboundMessages(
     prisma,
