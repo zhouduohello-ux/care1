@@ -1,7 +1,7 @@
 # CareMemory — AI 编码代理须知
 
 > 本文件面向为本项目编写代码的 AI 代理。只保留与开发、运行、维护相关的信息。项目主要文档与注释使用中文，本文件亦使用中文撰写；代码、命令、文件路径、技术术语保持原样。
-> 最后更新：2026-06-30（重新验证项目结构，确认迁移数量与实际文件一致）。
+> 最后更新：2026-07-11（重新验证项目结构，确认迁移数量与实际文件一致）。
 
 ---
 
@@ -124,6 +124,12 @@ CareMemory/
 - 已重构 E2E runner：`tests/scenarios/run-scenario.ts` 支持程序化复用，`tests/scenarios/run-all.ts` 可顺序运行所有 scenario 并输出汇总表格；新增 `pnpm test:e2e:staging`，用于针对任意 `API_BASE_URL`（本地或 staging）做冒烟测试；
 - 已为 staging E2E 加固本地测试工具：`/dev/test-tool/*` 在 `NODE_ENV=production` 下必须提供 `TEST_TOOL_API_KEY` 才能访问，生产环境保持禁用；
 - 已更新部署工作流：`.github/workflows/deploy.yml` 在 Render 部署后自动等待 `/health` 并就绪后运行 staging E2E smoke。
+- 已补充 L5 Turn Manager：`packages/engine/src/turn-manager.ts` 负责 pending question 提取、重提示、答案匹配与 `no_answer` 记录；
+- 已实现 pending question 12h gentle nudge 与 24h 静默超时：`CheckIn.nudgeSentAt`、`EventType.nudge_sent`、scheduler `scan-pending-nudge` / `scan-expired-pending` job；
+- 已将 nudge / timeout / MAX_REPROMPTS 时间可配置化：`PENDING_QUESTION_NUDGE_AFTER_MS`、`PENDING_QUESTION_TIMEOUT_MS`、`PENDING_QUESTION_MAX_REPROMPTS`；
+- 已将 Turn Manager 统计暴露到 admin metrics；
+- 已实现 `test:e2e:turn-manager`、`test:e2e:turn-manager-max`、`test:e2e:turn-timeline`、`test:e2e:pending-timeout` 等 E2E scenario；
+- 已为 L5 对话层补充完整规格文档 `docs/l5-dialogue-spec.md`（v1.17），记录 L4→L5 消息类型、处理矩阵、实现状态与 FOLLOW-001 至 FOLLOW-009。
 
 ---
 
@@ -174,7 +180,7 @@ CareMemory/
   - `redis.ts`：ioredis 实例注入；
   - `clock.ts`：时钟抽象（支持 test-tool 虚拟时间覆盖）；
   - `raw-body.ts`：WhatsApp HMAC 验签所需的原始请求体；
-- `apps/api/src/services/scheduler.ts`：BullMQ 调度器，负责 `scan-checkins` 与 `scan-reminders` 的 repeatable job 注册与立即触发；
+- `apps/api/src/services/scheduler.ts`：BullMQ 调度器，负责 `scan-checkins`、`scan-reminders`、`scan-pending-nudge` 与 `scan-expired-pending` 的 repeatable job 注册与立即触发；
 - `apps/api/src/lib/`：业务无关工具；
   - `pdf.ts`：Playwright PDF 渲染；
   - `export-token.ts`：GDPR 导出安全链接（7 天有效期）；
@@ -198,7 +204,8 @@ CareMemory/
 - `packages/db`：Prisma schema（`packages/db/prisma/schema.prisma`）与数据库 client；
   - 核心模型：User、Cycle、CheckIn、Event、Observation、NarrativeSummary、DiseaseCard、Brief；
   - Event 表同时承担审计日志角色（含 LLM 调用记录的 model/input/output/token usage 字段）；
-  - 枚举：CycleType（TRIAL_7_DAY / PLAN_4_WEEK）、CycleStatus（ONBOARDING / ACTIVE / COMPLETED / CANCELLED）、CheckInStatus（SCHEDULED / SENT / COMPLETED / MISSED / EXCEPTION）、EventType（inbound_message / outbound_message / observation_extracted / state_updated / llm_call / safety_check / checkin_scheduled / checkin_sent / checkin_completed / user_action）、ObservationCategory（symptom / medication / trigger / function / adverse_event / subjective / question / system_intent / profile）、NarrativeScope（session / cycle / longitudinal）；
+  - 枚举：CycleType（TRIAL_7_DAY / PLAN_4_WEEK）、CycleStatus（ONBOARDING / ACTIVE / COMPLETED / CANCELLED）、CheckInStatus（SCHEDULED / SENT / COMPLETED / MISSED / EXCEPTION）、EventType（inbound_message / outbound_message / observation_extracted / state_updated / llm_call / safety_check / checkin_scheduled / checkin_sent / checkin_completed / turn_reprompt / nudge_sent / user_action）、ObservationCategory（symptom / medication / trigger / function / adverse_event / subjective / question / system_intent / profile）、NarrativeScope（session / cycle / longitudinal）；
+  - `CheckIn` 额外字段：`repromptCount`、`pendingQuestion`、`nudgeSentAt`、`reminderSentAt`、`inExceptionMode`、`exceptionQuestionsAsked`，用于 Turn Manager、异常模式与提醒状态；
   - 已有三次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`；
   - Prisma client 输出目录为 `packages/db/generated/client/`（已加入 `.gitignore`）；
 - `packages/engine`：六层引擎核心（对外导出 types + perceive / plan / safetyCheck / renderMessage + LLM/quota/experiments/memory 工具）；
@@ -326,6 +333,11 @@ pnpm dev
 | `pnpm test:e2e:brief` | 运行 Brief/PDF E2E scenario |
 | `pnpm test:e2e:cross-cycle` | 运行跨 cycle 迟到回答 E2E scenario |
 | `pnpm test:e2e:7day` | 运行完整 7 天试用 E2E scenario |
+| `pnpm test:e2e:four-option-list` | 运行 4 选项 list 降级 E2E scenario |
+| `pnpm test:e2e:turn-manager` | 运行 Turn Manager 重提示 E2E scenario |
+| `pnpm test:e2e:turn-manager-max` | 运行 Turn Manager 最大重提示 E2E scenario |
+| `pnpm test:e2e:turn-timeline` | 运行 Turn Manager 完整时间线 E2E scenario |
+| `pnpm test:e2e:pending-timeout` | 运行 pending question 24h 超时 E2E scenario |
 | `pnpm test:e2e:staging` | 顺序运行所有 E2E scenario，可针对 `API_BASE_URL` 做冒烟测试 |
 
 ### 7.4 本地测试工具
@@ -367,5 +379,12 @@ LLM_TEMPERATURE_PLANNER=0.1
 
 ### 7.6 调度器 / Turn 管理配置
 
-pending question 的 gentle nudge 与静默超时时间可通过环境变量调整（单位：毫秒）：
 pending question 的 gentle nudge、静默超时与重提示上限可通过环境变量调整：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `PENDING_QUESTION_NUDGE_AFTER_MS` | `43200000`（12h） | 发出 check-in 后多久发送 gentle nudge |
+| `PENDING_QUESTION_TIMEOUT_MS` | `86400000`（24h） | 发出 check-in 后多久未回复则记录 `no_answer` |
+| `PENDING_QUESTION_MAX_REPROMPTS` | `2` | 答非所问时最多重提示几次 |
+
+这些变量在 `apps/api/src/services/scheduler.ts` 与 `packages/engine/src/turn-manager.ts` 中读取，均带非法值回退。
