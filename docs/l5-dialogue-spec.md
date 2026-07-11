@@ -1,7 +1,7 @@
 # CareMemory L5 对话层（Dialogue Layer）规格文档
 
 > **文档编号**：SPEC-L5-001  
-> **版本**：v1.8  
+> **版本**：v1.9  
 > **分支**：`feat/l5-dialogue-optimization`  
 > **对应架构层**：L5 Dialogue  
 > **上游**：L4 Planner | **下游**：L6 Safety、IM Adapter（WhatsApp）  
@@ -279,7 +279,11 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 ### 5.3 `template` 转换
 
-虽然 `OutboundMessage` 支持 `templateName` / `templateVariables`，但当前 L5 **不会主动生成 `template` 类型消息**。模板选择逻辑在 `packages/im-whatsapp/src/templates.ts` 中，目前由 dispatch 层在 24h 会话窗口外时调用，不属于 L5 职责。
+`OutboundMessage` 支持 `templateName` / `templateVariables`。L5 现在可以通过 `RenderOptions.templateResolver` 在 24h 会话窗口外直接生成 `content.type === "template"` 消息；`RenderOptions.outOfSession` 由外层根据 `user.sessionWindowExpiresAt` 计算后传入。
+
+当 `outOfSession === true`、平台 `capability.supportsTemplates === true` 且提供了 `templateResolver` 时，L5 会把渲染后的文本（含 buttons/list 的序列化选项）交给 resolver，resolver 返回平台相关的模板名与变量。当前 `apps/api/src/lib/template-resolver.ts` 使用 `packages/im-whatsapp/src/templates.ts` 的 `selectTemplate` / `buildTemplateVariables` 实现 WhatsApp 模板选择。
+
+dispatch 层保留兜底：如果收到的消息 `content.type !== "template"` 且窗口已关闭，仍会在发送前做一次模板转换。
 
 模板列表：
 
@@ -312,7 +316,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | Brief 链接消息生成 | ✅ 已实现（`generate_brief` + `briefUrl`） | `packages/engine/src/dialogue.ts` |
 | 多选（multi_select）渲染 | ✅ 已实现 | `packages/engine/src/dialogue.ts` |
 | 多语言支持（locale） | ✅ 已实现（en-GB / cy-GB） | `packages/engine/src/dialogue-locales/` |
-| 模板消息生成 | ❌ 未实现 | 当前由 dispatch 层负责 |
+| 模板消息生成 | ✅ 已实现（通过可选 `TemplateResolver` + `outOfSession`） | `packages/engine/src/dialogue.ts` |
 | LLM 润色 | ✅ 已实现 | `packages/engine/src/dialogue-llm-polish.ts` |
 | A/B 对话风格应用 | ✅ 已实现（规则化 v1/v2） | `packages/engine/src/dialogue-styles.ts` |
 
@@ -369,7 +373,8 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 ### L5-OPT-008 支持模板消息生成
 - **目标**：L5 能够直接输出 `content.type === "template"`，供 dispatch 在 24h 窗口外使用。
-- **依赖**：需要知道当前是否处于 24h 窗口外，该信息应通过 `conversationContext` 或外层判断传入。
+- **方案**：引入 `TemplateResolver` 注入到 `EngineContext` / `RenderOptions`，由外层根据 `user.sessionWindowExpiresAt` 设置 `outOfSession`；L5 将 buttons/list 序列化为文本后调用 resolver。
+- **状态**：✅ 已实现。
 
 ---
 
@@ -399,6 +404,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |---|---|---|---|---|
+| 2026-07-11 | v1.9 | 实现 24h 窗口外 template 消息生成：`RenderOptions` 新增 `outOfSession` / `templateResolver` / `templateContext`，L5 自动序列化 buttons/list 并生成模板消息；`EngineContext` 支持注入 `TemplateResolver` | AI Agent |
 | 2026-07-11 | v1.8 | 实现可选 LLM 润色层，`renderMessage` 支持 `enableLlmPolish` / `llmClient` / `onLlmCall`，新增 `packages/engine/src/dialogue-llm-polish.ts` 与单元测试 | AI Agent |
 | 2026-07-11 | v1.7 | 实现多语言 locale 基础设施，支持 `en-GB` / `cy-GB`，`renderMessage` 新增 `locale` 参数 | AI Agent |
 | 2026-07-11 | v1.6 | 实现 `multi_select` 多选渲染（list / 枚举文本 + "Reply with all that apply"） | AI Agent |
