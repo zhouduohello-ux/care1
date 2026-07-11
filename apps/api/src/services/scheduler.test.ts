@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import type { PrismaClient } from "@carememory/db";
-import type { Job, Queue, Worker } from "bullmq";
+import type { Job } from "bullmq";
 import type { Redis } from "ioredis";
 import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME } from "./scheduler.js";
 

@@ -5,6 +5,7 @@ import * as Sentry from "@sentry/node";
 import { Job, Queue, Worker } from "bullmq";
 import type { Clock } from "../plugins/clock.js";
 import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
+import { whatsappTemplateResolver } from "../lib/template-resolver.js";
 
 export const SCHEDULER_QUEUE_NAME = "carememory-scheduler";
 
@@ -41,7 +42,7 @@ export async function processDueCheckIns(
     });
     if (existing) continue;
 
-    const outbound = await handleCheckInTrigger({ prisma, now, quotaStore, llmConfig: loadLLMConfig() }, cycle.id);
+    const outbound = await handleCheckInTrigger({ prisma, now, quotaStore, llmConfig: loadLLMConfig(), templateResolver: whatsappTemplateResolver }, cycle.id);
     if (outbound.length > 0) {
       await dispatchOutboundMessages(prisma, outbound, now);
     }

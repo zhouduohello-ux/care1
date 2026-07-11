@@ -19,7 +19,7 @@ export interface Scenario {
   }>;
   expectations?: Array<{
     afterStep: number;
-    type: "message" | "planner" | "safety" | "observation" | "diseaseCard" | "brief" | "pdf";
+    type: "message" | "message_type" | "planner" | "safety" | "observation" | "diseaseCard" | "brief" | "pdf";
     path?: string;
     op: "eq" | "contains" | "not_contains" | "matches" | "in" | "exists";
     value?: unknown;
@@ -32,7 +32,14 @@ export interface Scenario {
 export interface StepResult {
   step: number;
   action: string;
-  outboundMessages: Array<{ content: { text: string } }>;
+  outboundMessages: Array<{
+    content: {
+      type: string;
+      text: string;
+      buttons?: unknown[];
+      list?: unknown[];
+    };
+  }>;
   trace?: {
     perception?: unknown;
     planner?: Record<string, unknown>;
@@ -280,6 +287,13 @@ export class ScenarioRunner {
 
     if (!stepResult) {
       return { pass: false, actual: undefined, reason: "no step result available" };
+    }
+
+    if (assertion.type === "message_type") {
+      const types = stepResult.outboundMessages.map((m) => m.content.type);
+      const actual = types.length === 1 ? types[0] : types;
+      const pass = matches(actual, assertion.op, assertion.value);
+      return { pass, actual };
     }
 
     if (assertion.type === "message") {

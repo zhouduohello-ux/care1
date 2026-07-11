@@ -6,6 +6,7 @@ import type { InboundMessage, Platform } from "@carememory/im-core";
 import { createExportTokenFactory } from "../lib/export-token.js";
 import { loadLLMConfig } from "@carememory/engine";
 import { listPersonas, loadPersona } from "../test-tool/persona-library.js";
+import { whatsappTemplateResolver } from "../lib/template-resolver.js";
 
 const SimulateMessageSchema = z.object({
   userId: z.string(),
@@ -75,6 +76,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
       createExportToken: createExportTokenFactory(fastify),
       webBaseUrl: process.env.API_BASE_URL ?? "http://localhost:3055",
       llmConfig: loadLLMConfig(),
+      templateResolver: whatsappTemplateResolver,
     };
   }
 
@@ -95,7 +97,25 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
   }
 
   async function simulateMessage(userId: string, text?: string, buttonId?: string) {
+    // In real WhatsApp, a user reply opens the 24h session window before the business
+    // responds. Mirror that in the test tool so outbound message type selection sees the
+    // window as open during processInbound.
+    const user = await fastify.prisma.user.findUnique({ where: { phoneNumber: userId } });
+    if (user) {
+      await fastify.prisma.user.update({
+        where: { id: user.id },
+        data: { sessionWindowExpiresAt: new Date(fastify.clock.now(userId).getTime() + 24 * 60 * 60 * 1000) },
+      });
+    }
     const result = await processInbound(engineContext(userId), buildInboundMessage(userId, text, buttonId));
+    // Keep the 24h session window open after each simulated user reply so subsequent
+    // outbound questions can use interactive message types instead of templates.
+    if (user) {
+      await fastify.prisma.user.update({
+        where: { id: user.id },
+        data: { sessionWindowExpiresAt: new Date(fastify.clock.now(userId).getTime() + 24 * 60 * 60 * 1000) },
+      });
+    }
     return { outboundMessages: result.messages, trace: result.trace };
   }
 
@@ -141,7 +161,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: newNow, llmConfig: loadLLMConfig() }, cycle.id);
+        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: newNow, llmConfig: loadLLMConfig(), templateResolver: whatsappTemplateResolver }, cycle.id);
         outboundMessages.push(...msgs);
 
         // If the engine did not schedule a next check-in (e.g. the cycle has no user bucket yet),

@@ -1,5 +1,84 @@
 export type Platform = "whatsapp" | "line" | "sms" | "test";
 
+export type TemplateKey = string;
+
+/**
+ * Describes the interactive capabilities of a target IM platform.
+ * L5 Dialogue uses this to choose the right message type (text/buttons/list)
+ * and to fall back safely when a platform limit would be exceeded.
+ */
+export interface PlatformCapability {
+  platform: Platform;
+  /** Maximum number of buttons allowed in a single buttons message. */
+  maxButtons: number;
+  /** Maximum character length for a single button title. */
+  buttonTitleMaxLength: number;
+  /** Maximum rows allowed in a single list message. */
+  listMaxRows: number;
+  /** Maximum character length for a list row title. */
+  listTitleMaxLength: number;
+  /** Maximum character length for a list row description (optional). */
+  listDescriptionMaxLength?: number;
+  /** Maximum character length for a single free-form text body (optional). */
+  maxBodyLength?: number;
+  /** Whether the platform supports pre-approved template messages. */
+  supportsTemplates: boolean;
+  /** Whether the platform supports rich formatting (markdown, html, etc.). */
+  supportsRichText: boolean;
+  /** Whether free-form text outside a session window requires a template. */
+  freeTextRequiresSession: boolean;
+}
+
+export const DEFAULT_PLATFORM_CAPABILITIES: Record<Platform, PlatformCapability> = {
+  whatsapp: {
+    platform: "whatsapp",
+    maxButtons: 3,
+    buttonTitleMaxLength: 20,
+    listMaxRows: 10,
+    listTitleMaxLength: 24,
+    listDescriptionMaxLength: 72,
+    maxBodyLength: 1024,
+    supportsTemplates: true,
+    supportsRichText: false,
+    freeTextRequiresSession: true,
+  },
+  line: {
+    platform: "line",
+    maxButtons: 4,
+    buttonTitleMaxLength: 20,
+    listMaxRows: 10,
+    listTitleMaxLength: 40,
+    listDescriptionMaxLength: 60,
+    maxBodyLength: 5000,
+    supportsTemplates: false,
+    supportsRichText: false,
+    freeTextRequiresSession: false,
+  },
+  sms: {
+    platform: "sms",
+    maxButtons: 0,
+    buttonTitleMaxLength: 0,
+    listMaxRows: 0,
+    listTitleMaxLength: 0,
+    maxBodyLength: 1600,
+    supportsTemplates: false,
+    supportsRichText: false,
+    freeTextRequiresSession: false,
+  },
+  test: {
+    platform: "test",
+    maxButtons: 3,
+    buttonTitleMaxLength: 20,
+    listMaxRows: 10,
+    listTitleMaxLength: 24,
+    listDescriptionMaxLength: 72,
+    maxBodyLength: 1024,
+    supportsTemplates: false,
+    supportsRichText: false,
+    freeTextRequiresSession: false,
+  },
+};
+
 export interface InboundMessage {
   platform: Platform;
   channelId: string;
@@ -29,13 +108,14 @@ export interface OutboundMessage {
     text: string;
     buttons?: Array<{ id: string; title: string }>;
     list?: Array<{ id: string; title: string; description?: string }>;
-    templateName?: string;
+    templateKey?: TemplateKey;
     templateVariables?: Record<string, string>;
   };
 }
 
 export interface IMAdapter {
   readonly platform: Platform;
+  readonly capability: PlatformCapability;
   parseWebhook(payload: unknown): InboundMessage | InboundMessage[];
   buildPayload(message: OutboundMessage): unknown;
   verifySignature?(payload: string | Buffer, signature: string, secret: string): boolean;

@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
-import type { InboundMessage, OutboundMessage, Platform } from "@carememory/im-core";
+import type { OutboundMessage, Platform } from "@carememory/im-core";
 import { DefaultPlatformRegistry } from "@carememory/im-core";
 
 
@@ -8,6 +8,7 @@ import { handleInbound } from "@carememory/engine";
 import { createExportTokenFactory } from "../lib/export-token.js";
 import { loadLLMConfig } from "@carememory/engine";
 import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
+import { whatsappTemplateResolver } from "../lib/template-resolver.js";
 
 export default async function webhookRoutes(fastify: FastifyInstance) {
   const adapter = createWhatsAppAdapter();
@@ -79,6 +80,7 @@ export default async function webhookRoutes(fastify: FastifyInstance) {
           createExportToken: createExportTokenFactory(fastify),
           webBaseUrl: process.env.API_BASE_URL ?? "http://localhost:3055",
           llmConfig: loadLLMConfig(),
+          templateResolver: whatsappTemplateResolver,
         },
         message
       );

@@ -1,7 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { generateBriefHtml } from "@carememory/brief-templates";
-import { Prisma } from "@carememory/db";
 import crypto from "node:crypto";
 import { renderHtmlToPdf } from "../lib/pdf.js";
 

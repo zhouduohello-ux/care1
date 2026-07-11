@@ -9,6 +9,19 @@ import { safetyCheck } from "./safety.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
 import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
+import {
+  pendingQuestionFromPlannerOutput,
+  getTurnState,
+  isAnswerToPendingQuestion,
+  isAnswerRelevantWithLlm,
+  buildRepromptMessage,
+  classifyNonAnswer,
+  recordReprompt,
+  clearPendingQuestion,
+  setPendingQuestion,
+  MAX_REPROMPTS,
+  type PendingQuestion,
+} from "./turn-manager.js";
 import { hasLlmQuota, incrementLlmQuota } from "./llm-quota.js";
 import { scheduleNextCheckInOffset, getBucket } from "./experiments.js";
 import {
@@ -47,6 +60,10 @@ function emptyPlannerOutput(purpose: string): PlannerOutput {
 
 /** Cache OpenAI clients by (layer, model, temperature) tuple. */
 const llmClientCache = new Map<string, LLMClient>();
+
+function isSessionOpen(user: { sessionWindowExpiresAt?: Date | null }, now: Date): boolean {
+  return !!user.sessionWindowExpiresAt && user.sessionWindowExpiresAt.getTime() > now.getTime();
+}
 
 function resolveLlmClient(context: EngineContext, model: LlmModelType): LLMClient | undefined {
   const cfg = context.llmConfig;
@@ -635,6 +652,97 @@ export async function processInbound(
     );
   }
 
+  // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
+  if (activeCheckIn) {
+    const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
+    if (pending && !isAnswerToPendingQuestion(message, perception, pending, user.locale)) {
+      const nextRepromptCount = repromptCount + 1;
+
+      if (nextRepromptCount > MAX_REPROMPTS) {
+        // Too many failed attempts: record a no-answer observation so the planner skips this topic,
+        // then continue to the planner as usual.
+        await saveObservations(
+          prisma,
+          user.id,
+          cycle.id,
+          inboundEventId,
+          [
+            {
+              category: "subjective",
+              concept: pending.topic,
+              value: "no_answer",
+              confidence: 1,
+              extractedBy: "rule",
+            },
+          ],
+          context.now
+        );
+        await clearPendingQuestion(prisma, activeCheckIn.id);
+      } else {
+        // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
+        // accept it and move on instead of reprompting.
+        const dialogueLlmClient = resolveLlmClient(context, "dialogue");
+        let acceptedByLlm = false;
+        if (allowLlm && dialogueLlmClient) {
+          const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
+          if (relevance.isAnswer) {
+            await saveObservations(
+              prisma,
+              user.id,
+              cycle.id,
+              inboundEventId,
+              [
+                {
+                  category: "subjective",
+                  concept: pending.topic,
+                  value: message.content.text ?? "yes",
+                  confidence: 0.8,
+                  extractedBy: "llm",
+                },
+              ],
+              context.now
+            );
+            await clearPendingQuestion(prisma, activeCheckIn.id);
+            acceptedByLlm = true;
+          }
+        }
+
+        if (!acceptedByLlm) {
+          const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+          const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+          const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, {
+            style: conversationStyle,
+            locale: user.locale,
+            cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+            outOfSession: !isSessionOpen(user, context.now),
+            templateResolver: context.templateResolver,
+            templateContext: {
+              nickname: user.nickname ?? undefined,
+              firstName: user.nickname ?? undefined,
+            },
+          });
+          const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+          await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+          await recordReprompt(
+            prisma,
+            user.id,
+            cycle.id,
+            activeCheckIn.id,
+            pending,
+            nextRepromptCount,
+            classifyNonAnswer(perception),
+            context.now,
+            perception.traceId
+          );
+          return {
+            messages,
+            trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+          };
+        }
+      }
+    }
+  }
+
   // L4 Planner
   const latestNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
@@ -669,7 +777,44 @@ export async function processInbound(
   await savePlannerEvent(prisma, user.id, cycle.id, plannerOutput, perception.traceId);
 
   // L5 Dialogue
-  const outbound = renderMessage(userId, plannerOutput);
+  const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+  let dialogueTrace: import("./types.js").DialogueTrace | undefined;
+  let outbound: OutboundMessage;
+  try {
+    outbound = await renderMessage(userId, plannerOutput, {
+    style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+    locale: user.locale,
+    cycleContext: {
+      cycleType: cycle.type,
+      cycleDay,
+      briefReady: true,
+    },
+    outOfSession: !isSessionOpen(user, context.now),
+    templateResolver: context.templateResolver,
+    templateContext: {
+      nickname: user.nickname ?? undefined,
+      firstName: user.nickname ?? undefined,
+    },
+    onRenderTrace: (trace) => {
+      dialogueTrace = trace;
+    },
+  });
+  } catch (err) {
+    console.error("L5 render failed, falling back to safe message", {
+      userId,
+      cycleId: cycle.id,
+      nextAction: plannerOutput.nextAction,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    outbound = {
+      userId,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "text",
+        text: "I'm sorry, I couldn't prepare a reply right now. Please try again or contact your healthcare team if you need help.",
+      },
+    };
+  }
 
   // Update check-in budget if active
   if (activeCheckIn && plannerOutput.nextAction.budgetCost > 0) {
@@ -687,7 +832,25 @@ export async function processInbound(
   }
 
   const { messages, summary } = safetyWrapWithSummary(userId, [outbound]);
-  await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+  await saveOutboundMessages(
+    prisma,
+    user.id,
+    messages,
+    cycle.id,
+    new Date(),
+    inboundEventId,
+    perception.traceId
+  );
+
+  // Persist the pending question (or clear it) on the active check-in for TurnManager.
+  if (activeCheckIn) {
+    const pending = pendingQuestionFromPlannerOutput(plannerOutput);
+    if (pending) {
+      await setPendingQuestion(prisma, activeCheckIn.id, pending);
+    } else {
+      await clearPendingQuestion(prisma, activeCheckIn.id);
+    }
+  }
 
   // Generate Disease Card and schedule next check-in when session ends
   if (plannerOutput.nextAction.type === "end_session" && activeCheckIn) {
@@ -751,26 +914,48 @@ export async function processInbound(
       data: { webUrl: `/b/${brief.id}?t=${briefAccessToken}` },
     });
 
-    // For 4-week plans that have reached ~28 days, prompt the user to continue rather than scheduling another check-in on this cycle.
+    // Send a follow-up message with the Brief link when the cycle is completing.
+    if (context.webBaseUrl) {
+      const briefUrl = `${context.webBaseUrl}/b/${brief.id}?t=${briefAccessToken}`;
+      const briefOutput: PlannerOutput = {
+        reasoning: "Brief generated. Sending link to patient.",
+        sessionObjective: "Share visit brief link with patient.",
+        nextAction: {
+          type: "generate_brief",
+          topic: "brief_ready",
+          purpose: "Your visit brief is ready.",
+          budgetCost: 0,
+        },
+        safetyFlag: "none",
+        updatePatientState: {},
+      };
+      const briefMessage = await renderMessage(userId, briefOutput, {
+        style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+        locale: user.locale,
+        cycleContext: { briefUrl },
+      });
+      const { messages: safeBriefMessages } = safetyWrapWithSummary(userId, [briefMessage]);
+      await saveOutboundMessages(
+        prisma,
+        user.id,
+        safeBriefMessages,
+        cycle.id,
+        new Date(),
+        inboundEventId,
+        perception.traceId
+      );
+      messages.push(...safeBriefMessages);
+    }
+
+    // For 4-week plans that have reached ~28 days, or 7-day trials that have
+    // reached ~7 days, mark the cycle as COMPLETED. L5 has already generated
+    // the appropriate closing message via cycleContext.
     const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-    if (cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) {
+    if ((cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) || (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7)) {
       await prisma.cycle.update({
         where: { id: cycle.id },
         data: { status: "COMPLETED", endedAt: context.now },
       });
-      if (messages[0]?.content.type === "text") {
-        messages[0].content.text =
-          "You've reached the end of your 4-week CareMemory plan. Reply CONTINUE to start your next 4-week cycle, or STOP to pause.";
-      }
-    } else if (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7) {
-      await prisma.cycle.update({
-        where: { id: cycle.id },
-        data: { status: "COMPLETED", endedAt: context.now },
-      });
-      if (messages[0]?.content.type === "text") {
-        messages[0].content.text =
-          "You've completed your 7-day trial. Your Disease Card and Brief are ready. Reply CONTINUE to start a 4-week plan, or STOP to pause.";
-      }
     } else {
       // Schedule the next check-in based on the user's A/B bucket (48h vs 72h) at 10:00 local time
       const nextCheckinAt = scheduleNextCheckInOffset(userId, context.now);
@@ -783,7 +968,7 @@ export async function processInbound(
 
   return {
     messages,
-    trace: { perception, planner: plannerOutput, safety: summary },
+    trace: { perception, planner: plannerOutput, dialogue: dialogueTrace, safety: summary },
   };
 }
 
@@ -873,9 +1058,54 @@ export async function handleCheckInTrigger(
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, cycle.userId, cycle.id, plannerOutput);
 
-  const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput);
+  let outbound: OutboundMessage;
+  try {
+    outbound = await renderMessage(cycle.user.phoneNumber, plannerOutput, {
+      style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+      locale: cycle.user.locale,
+      cycleContext: {
+        cycleType: cycle.type,
+        cycleDay: plannerInput.patientContext.cycleDay,
+        briefReady: true,
+      },
+      outOfSession: !isSessionOpen(cycle.user, context.now),
+      templateResolver: context.templateResolver,
+      templateContext: {
+        nickname: cycle.user.nickname ?? undefined,
+        firstName: cycle.user.nickname ?? undefined,
+      },
+    });
+  } catch (err) {
+    console.error("L5 render failed in handleCheckInTrigger, falling back to safe message", {
+      userId: cycle.user.phoneNumber,
+      cycleId: cycle.id,
+      nextAction: plannerOutput.nextAction,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    outbound = {
+      userId: cycle.user.phoneNumber,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "text",
+        text: "I'm sorry, I couldn't prepare your check-in right now. Please send START ASTHMA when you're ready to try again.",
+      },
+    };
+  }
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
-  await saveOutboundMessages(prisma, cycle.userId, messages, cycle.id, new Date(), checkIn.id);
+  await saveOutboundMessages(
+    prisma,
+    cycle.userId,
+    messages,
+    cycle.id,
+    new Date(),
+    checkIn.id,
+    undefined
+  );
+
+  const pending = pendingQuestionFromPlannerOutput(plannerOutput);
+  if (pending) {
+    await setPendingQuestion(prisma, checkIn.id, pending);
+  }
 
   // Mark check-in as SENT now that messages have been sent
   await prisma.checkIn.update({
