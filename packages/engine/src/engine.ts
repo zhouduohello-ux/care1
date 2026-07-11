@@ -672,6 +672,7 @@ export async function processInbound(
   const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
   const outbound = renderMessage(userId, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+    locale: user.locale,
     cycleContext: {
       cycleType: cycle.type,
       cycleDay,
@@ -776,6 +777,7 @@ export async function processInbound(
       };
       const briefMessage = renderMessage(userId, briefOutput, {
         style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+        locale: user.locale,
         cycleContext: { briefUrl },
       });
       const { messages: safeBriefMessages } = safetyWrapWithSummary(userId, [briefMessage]);
@@ -904,6 +906,7 @@ export async function handleCheckInTrigger(
 
   const outbound = renderMessage(cycle.user.phoneNumber, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
+    locale: cycle.user.locale,
     cycleContext: {
       cycleType: cycle.type,
       cycleDay: plannerInput.patientContext.cycleDay,

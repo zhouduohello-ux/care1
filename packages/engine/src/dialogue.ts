@@ -2,6 +2,12 @@ import type { OutboundMessage, PlatformCapability } from "@carememory/im-core";
 import { DEFAULT_PLATFORM_CAPABILITIES } from "@carememory/im-core";
 import type { PlannerOutput } from "./types.js";
 import { styleText, type ConversationStyle } from "./dialogue-styles.js";
+import {
+  getLocale,
+  translateOptionLabels,
+  formatBriefReadyMessage,
+  type DialogueLocale,
+} from "./dialogue-locales/index.js";
 
 export interface CycleContext {
   cycleType?: "TRIAL_7_DAY" | "PLAN_4_WEEK";
@@ -15,6 +21,7 @@ export interface RenderOptions {
   listActionButtonTitle?: string;
   style?: ConversationStyle;
   cycleContext?: CycleContext;
+  locale?: string;
 }
 
 export function renderMessage(
@@ -24,6 +31,7 @@ export function renderMessage(
 ): OutboundMessage {
   const action = plannerOutput.nextAction;
   const capability = options.capability ?? DEFAULT_PLATFORM_CAPABILITIES.whatsapp;
+  const locale = getLocale(options.locale);
 
   if (action.type === "safety_response") {
     return {
@@ -31,19 +39,19 @@ export function renderMessage(
       conversationContext: { requiresSession: true, priority: "urgent" },
       content: {
         type: "text",
-        text: styleText(action.purpose, options.style ?? "v1", "safety"),
+        text: styleText(action.purpose, options.style ?? "v1", "safety", locale),
       },
     };
   }
 
   if (action.type === "end_session") {
-    const closingText = resolveClosingText(action.purpose, options.cycleContext);
+    const closingText = resolveClosingText(action.purpose, locale, options.cycleContext);
     return {
       userId,
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "text",
-        text: styleText(closingText, options.style ?? "v1", "closing"),
+        text: styleText(closingText, options.style ?? "v1", "closing", locale),
       },
     };
   }
@@ -54,13 +62,13 @@ export function renderMessage(
       conversationContext: { requiresSession: true, priority: "normal" },
       content: {
         type: "text",
-        text: resolveBriefReadyText(action.purpose, options.cycleContext?.briefUrl),
+        text: resolveBriefReadyText(action.purpose, locale, options.cycleContext?.briefUrl),
       },
     };
   }
 
   if (action.type === "ask" && action.expectedResponseType === "scale") {
-    return renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1");
+    return renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1", locale);
   }
 
   if (action.type === "ask" && action.expectedResponseType === "single_choice" && action.options) {
@@ -71,6 +79,7 @@ export function renderMessage(
       action.options,
       capability,
       options.style ?? "v1",
+      locale,
       options.listActionButtonTitle
     );
   }
@@ -82,7 +91,8 @@ export function renderMessage(
       action.topic,
       action.options,
       capability,
-      options.style ?? "v1"
+      options.style ?? "v1",
+      locale
     );
   }
 
@@ -91,7 +101,7 @@ export function renderMessage(
     conversationContext: { requiresSession: true, priority: "normal" },
     content: {
       type: "text",
-      text: styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform"),
+      text: styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform", locale),
     },
   };
 }
@@ -100,9 +110,10 @@ function renderScaleQuestion(
   userId: string,
   purpose: string,
   capability: PlatformCapability,
-  style: ConversationStyle
+  style: ConversationStyle,
+  locale: DialogueLocale
 ): OutboundMessage {
-  const styledPurpose = styleText(purpose, style, "question");
+  const styledPurpose = styleText(purpose, style, "question", locale);
   const scaleOptions = ["1", "2", "3", "4", "5"];
 
   if (capability.maxButtons >= scaleOptions.length) {
@@ -141,10 +152,11 @@ function renderSingleChoiceQuestion(
   options: string[],
   capability: PlatformCapability,
   style: ConversationStyle,
+  locale: DialogueLocale,
   listActionButtonTitle = "Choose"
 ): OutboundMessage {
-  const styledPurpose = styleText(purpose, style, "question");
-  const labels = getOptionLabels(topic, options);
+  const styledPurpose = styleText(purpose, style, "question", locale);
+  const labels = translateOptionLabels(locale, topic, options);
 
   const items = options.map((id, idx) => ({
     id,
@@ -206,16 +218,17 @@ function renderMultiSelectQuestion(
   topic: string,
   options: string[],
   capability: PlatformCapability,
-  style: ConversationStyle
+  style: ConversationStyle,
+  locale: DialogueLocale
 ): OutboundMessage {
-  const styledPurpose = styleText(purpose, style, "question");
-  const labels = getOptionLabels(topic, options);
+  const styledPurpose = styleText(purpose, style, "question", locale);
+  const labels = translateOptionLabels(locale, topic, options);
   const items = options.map((id, idx) => ({
     id,
     label: labels[idx] ?? id,
   }));
 
-  const footer = "Reply with all that apply.";
+  const footer = locale.multiSelectFooter;
 
   if (capability.listMaxRows > 0 && items.length <= capability.listMaxRows) {
     return {
@@ -246,42 +259,33 @@ function renderMultiSelectQuestion(
   };
 }
 
-function getOptionLabels(topic: string, options: string[]): string[] {
-  const labels: Record<string, string[]> = {
-    nighttime_symptoms: ["None", "Mild", "Disturbed sleep", "Woke me up"],
-    reliever_use: ["0 times", "1 time", "2 times", "3+ times"],
-    activity_limitation: ["No limitation", "Yes, limited"],
-  };
-  return labels[topic] ?? options;
-}
-
 function truncate(text: string, maxLength: number): string {
   if (maxLength <= 0) return text;
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength - 1) + "…";
 }
 
-function resolveClosingText(purpose: string, cycleContext?: CycleContext): string {
+function resolveClosingText(purpose: string, locale: DialogueLocale, cycleContext?: CycleContext): string {
   if (!cycleContext) return purpose;
 
   const { cycleType, cycleDay, briefReady } = cycleContext;
 
   if (cycleType === "PLAN_4_WEEK" && cycleDay !== undefined && cycleDay >= 28) {
-    return "You've reached the end of your 4-week CareMemory plan. Reply CONTINUE to start your next 4-week cycle, or STOP to pause.";
+    return locale.closingMessages.plan4WeekComplete;
   }
 
   if (cycleType === "TRIAL_7_DAY" && cycleDay !== undefined && cycleDay >= 7) {
     return briefReady
-      ? "You've completed your 7-day trial. Your Disease Card and Brief are ready. Reply CONTINUE to start a 4-week plan, or STOP to pause."
-      : "You've completed your 7-day trial. Reply CONTINUE to start a 4-week plan, or STOP to pause.";
+      ? locale.closingMessages.trial7DayCompleteWithBrief
+      : locale.closingMessages.trial7DayComplete;
   }
 
   return purpose;
 }
 
-function resolveBriefReadyText(purpose: string, briefUrl?: string): string {
+function resolveBriefReadyText(purpose: string, locale: DialogueLocale, briefUrl?: string): string {
   if (briefUrl) {
-    return `Your Asthma Visit Brief is ready. You can view it here: ${briefUrl}. Please bring it to your appointment or share it with your care team.`;
+    return formatBriefReadyMessage(locale, briefUrl);
   }
-  return purpose || "Your visit brief is ready.";
+  return purpose || locale.briefReadyTemplate.replace(/\{url\}/g, "");
 }

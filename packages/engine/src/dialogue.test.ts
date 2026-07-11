@@ -412,4 +412,70 @@ describe("renderMessage", () => {
       expect(message.content.text).toContain("All questions answered.");
     });
   });
+
+  describe("locale support", () => {
+    it("uses Welsh (cy-GB) labels when locale is set", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "nighttime_symptoms",
+        expectedResponseType: "single_choice",
+        options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      });
+      const message = renderMessage("user_1", output, { capability: whatsappCapability, locale: "cy-GB" });
+
+      expect(message.content.type).toBe("list");
+      expect(message.content.list?.[0].title).toBe("Dim");
+      expect(message.content.list?.[3].title).toBe("Deffroais i");
+    });
+
+    it("falls back to en-GB for unknown locale", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "nighttime_symptoms",
+        expectedResponseType: "single_choice",
+        options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      });
+      const message = renderMessage("user_1", output, { capability: whatsappCapability, locale: "xx-XX" });
+
+      expect(message.content.list?.[0].title).toBe("None");
+    });
+
+    it("uses Welsh multi-select footer", () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "unknown_topic",
+        expectedResponseType: "multi_select",
+        options: ["a", "b"],
+      });
+      const message = renderMessage("user_1", output, { capability: whatsappCapability, locale: "cy-GB" });
+
+      expect(message.content.text).toContain("Atebwch gyda'r hyn sy'n berthnasol.");
+    });
+
+    it("uses Welsh brief-ready template", () => {
+      const output = makePlannerOutput({
+        type: "generate_brief",
+        topic: "brief_ready",
+        purpose: "Your visit brief is ready.",
+      });
+      const message = renderMessage("user_1", output, {
+        locale: "cy-GB",
+        cycleContext: { briefUrl: "https://example.com/b/123" },
+      });
+
+      expect(message.content.text).toContain("Crynodeb Ymweliad Asthma");
+      expect(message.content.text).toContain("https://example.com/b/123");
+    });
+
+    it("uses Welsh cycle closing message", () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks." });
+      const message = renderMessage("user_1", output, {
+        locale: "cy-GB",
+        cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 7, briefReady: true },
+      });
+
+      expect(message.content.text).toContain("treial 7 diwrnod");
+      expect(message.content.text).toContain("Cerdyn Clefyd");
+    });
+  });
 });

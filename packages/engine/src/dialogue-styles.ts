@@ -1,3 +1,5 @@
+import type { DialogueLocale } from "./dialogue-locales/index.js";
+
 export type ConversationStyle = "v1" | "v2";
 
 /**
@@ -9,11 +11,16 @@ export type ConversationStyle = "v1" | "v2";
  * Safety-critical messages (high-risk safety_response) are only lightly restyled
  * so that the core safety instruction is never obscured.
  */
-export function styleText(text: string, style: ConversationStyle, intent: "safety" | "closing" | "question" | "inform" = "inform"): string {
+export function styleText(
+  text: string,
+  style: ConversationStyle,
+  intent: "safety" | "closing" | "question" | "inform" = "inform",
+  locale?: DialogueLocale
+): string {
   if (style === "v1" || !text) return text;
 
   if (intent === "safety") {
-    return styleSafetyText(text);
+    return styleSafetyText(text, locale);
   }
 
   if (intent === "closing") {
@@ -27,13 +34,13 @@ export function styleText(text: string, style: ConversationStyle, intent: "safet
   return styleInformText(text);
 }
 
-function styleSafetyText(text: string): string {
-  // Keep safety instructions intact; only add a brief empathetic prefix if absent.
+function styleSafetyText(text: string, locale?: DialogueLocale): string {
+  const empathy = locale?.safetyEmpathy;
   if (/^If you're having severe/i.test(text)) {
-    return `I'm sorry you're struggling. ${text}`;
+    return `${empathy?.struggling ?? "I'm sorry you're struggling."} ${text}`;
   }
   if (/^You reported a possible reaction/i.test(text)) {
-    return `Thanks for flagging this. ${text}`;
+    return `${empathy?.adverseEvent ?? "Thanks for flagging this."} ${text}`;
   }
   return text;
 }
