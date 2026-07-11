@@ -124,7 +124,7 @@ describe("scheduler", () => {
       expect(mockWorkerInstances[0].name).toBe(SCHEDULER_QUEUE_NAME);
     });
 
-    it("registers repeatable scanners for due check-ins, reminders, and expired pending questions", async () => {
+    it("registers repeatable scanners for due check-ins, reminders, expired pending questions, and pending nudges", async () => {
       const prisma = makePrismaStub();
       const clock = makeClock(new Date("2026-06-15T10:00:00.000Z"));
       const redis = { options: { host: "localhost", port: 6381 }, quit: vi.fn() } as unknown as Redis;
@@ -132,9 +132,9 @@ describe("scheduler", () => {
       await startScheduler(prisma, clock, redis, undefined, { intervalMs: 30_000 });
 
       const queue = mockQueueInstances[0];
-      expect(queue.upsertJobScheduler).toHaveBeenCalledTimes(3);
-      expect(queue.schedulers).toHaveLength(3);
-      expect(queue.schedulers.map((s) => s.id).sort()).toEqual(["scan-checkins", "scan-expired-pending", "scan-reminders"]);
+      expect(queue.upsertJobScheduler).toHaveBeenCalledTimes(4);
+      expect(queue.schedulers).toHaveLength(4);
+      expect(queue.schedulers.map((s) => s.id).sort()).toEqual(["scan-checkins", "scan-expired-pending", "scan-pending-nudge", "scan-reminders"]);
       expect(queue.schedulers.every((s) => s.repeat?.every === 30_000)).toBe(true);
     });
 
@@ -229,6 +229,39 @@ describe("scheduler", () => {
       expect(prisma.checkIn.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({ status: "MISSED", pendingQuestion: expect.anything() }),
+        })
+      );
+    });
+
+    it("processes scan-pending-nudge by sending a gentle nudge for check-ins older than 12h", async () => {
+      const prisma = makePrismaStub();
+      prisma._checkIns.push({
+        id: "ci_1",
+        status: "SENT",
+        sentAt: new Date("2026-06-14T20:00:00.000Z"),
+        nudgeSentAt: null,
+        pendingQuestion: { topic: "reliever_use" },
+        cycle: { user: { phoneNumber: "447123456789" } },
+      });
+      const clock = makeClock(new Date("2026-06-15T10:00:00.000Z"));
+      const processor = createProcessor({ prisma, clock });
+
+      await processor({ name: "scan-pending-nudge", data: {}, id: "job-4" } as unknown as Job);
+
+      expect(prisma.checkIn.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            status: "SENT",
+            sentAt: { lte: new Date(clock.now().getTime() - 12 * 60 * 60 * 1000) },
+            nudgeSentAt: null,
+            pendingQuestion: { not: expect.anything() },
+          },
+          include: { cycle: { include: { user: true } } },
+        })
+      );
+      expect(prisma.checkIn.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ nudgeSentAt: clock.now() }),
         })
       );
     });
