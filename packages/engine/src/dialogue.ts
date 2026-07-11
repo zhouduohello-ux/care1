@@ -16,6 +16,19 @@ export interface CycleContext {
   briefUrl?: string;
 }
 
+export interface TemplateContext {
+  nickname?: string;
+  firstName?: string;
+  briefUrl?: string;
+}
+
+export interface TemplateResolver {
+  resolve(
+    message: OutboundMessage,
+    context: TemplateContext
+  ): { templateName: string; templateVariables: Record<string, string> };
+}
+
 export interface RenderOptions {
   capability?: PlatformCapability;
   listActionButtonTitle?: string;
@@ -26,6 +39,10 @@ export interface RenderOptions {
   enableLlmPolish?: boolean;
   llmClient?: import("./llm.js").LLMClient;
   onLlmCall?: import("./perception.js").LlmAuditCallback;
+  /** When true, L5 should render the message as a platform template if the capability supports it. */
+  outOfSession?: boolean;
+  templateResolver?: TemplateResolver;
+  templateContext?: TemplateContext;
 }
 
 export async function renderMessage(
@@ -38,7 +55,7 @@ export async function renderMessage(
   const locale = getLocale(options.locale);
 
   if (action.type === "safety_response") {
-    return polishIfEnabled(
+    const polished = await polishIfEnabled(
       {
         userId,
         conversationContext: { requiresSession: true, priority: "urgent" },
@@ -49,11 +66,12 @@ export async function renderMessage(
       },
       { intent: "safety", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
     );
+    return applyTemplateIfNeeded(polished, capability, options, locale);
   }
 
   if (action.type === "end_session") {
     const closingText = resolveClosingText(action.purpose, locale, options.cycleContext);
-    return polishIfEnabled(
+    const polished = await polishIfEnabled(
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -64,10 +82,11 @@ export async function renderMessage(
       },
       { intent: "closing", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
     );
+    return applyTemplateIfNeeded(polished, capability, options, locale);
   }
 
   if (action.type === "generate_brief") {
-    return polishIfEnabled(
+    const polished = await polishIfEnabled(
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -78,14 +97,16 @@ export async function renderMessage(
       },
       { intent: "inform", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
     );
+    return applyTemplateIfNeeded(polished, capability, options, locale);
   }
 
   if (action.type === "ask" && action.expectedResponseType === "scale") {
-    return renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1", locale);
+    const rendered = renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1", locale);
+    return applyTemplateIfNeeded(rendered, capability, options, locale);
   }
 
   if (action.type === "ask" && action.expectedResponseType === "single_choice" && action.options) {
-    return renderSingleChoiceQuestion(
+    const rendered = renderSingleChoiceQuestion(
       userId,
       action.purpose,
       action.topic,
@@ -95,10 +116,11 @@ export async function renderMessage(
       locale,
       options.listActionButtonTitle
     );
+    return applyTemplateIfNeeded(rendered, capability, options, locale);
   }
 
   if (action.type === "ask" && action.expectedResponseType === "multi_select" && action.options) {
-    return renderMultiSelectQuestion(
+    const rendered = renderMultiSelectQuestion(
       userId,
       action.purpose,
       action.topic,
@@ -107,9 +129,10 @@ export async function renderMessage(
       options.style ?? "v1",
       locale
     );
+    return applyTemplateIfNeeded(rendered, capability, options, locale);
   }
 
-  return polishIfEnabled(
+  const fallback = await polishIfEnabled(
     {
       userId,
       conversationContext: { requiresSession: true, priority: "normal" },
@@ -126,6 +149,7 @@ export async function renderMessage(
       enabled: options.enableLlmPolish,
     }
   );
+  return applyTemplateIfNeeded(fallback, capability, options, locale);
 }
 
 function renderScaleQuestion(
@@ -285,6 +309,53 @@ function truncate(text: string, maxLength: number): string {
   if (maxLength <= 0) return text;
   if (text.length <= maxLength) return text;
   return text.slice(0, maxLength - 1) + "…";
+}
+
+function serializeContentToText(message: OutboundMessage): string {
+  if (message.content.type === "text" || message.content.type === "template") {
+    return message.content.text;
+  }
+
+  const items = message.content.buttons ?? message.content.list ?? [];
+  const lines = items.map((item, idx) => `${idx + 1}. ${item.title} (reply ${item.id})`);
+
+  if (lines.length === 0) {
+    return message.content.text;
+  }
+
+  return `${message.content.text}\n\n${lines.join("\n")}`;
+}
+
+function applyTemplateIfNeeded(
+  message: OutboundMessage,
+  capability: PlatformCapability,
+  options: RenderOptions,
+  locale: DialogueLocale
+): OutboundMessage {
+  if (!options.outOfSession || !options.templateResolver || !capability.supportsTemplates) {
+    return message;
+  }
+  if (message.content.type === "template") {
+    return message;
+  }
+
+  const bodyText = serializeContentToText(message);
+  const textMessage: OutboundMessage = {
+    ...message,
+    content: { type: "text", text: bodyText },
+  };
+  const { templateName, templateVariables } = options.templateResolver.resolve(textMessage, options.templateContext ?? {});
+
+  return {
+    ...message,
+    conversationContext: { ...message.conversationContext, requiresSession: false },
+    content: {
+      type: "template",
+      text: bodyText,
+      templateName,
+      templateVariables,
+    },
+  };
 }
 
 function resolveClosingText(purpose: string, locale: DialogueLocale, cycleContext?: CycleContext): string {

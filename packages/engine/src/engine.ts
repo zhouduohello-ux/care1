@@ -48,6 +48,10 @@ function emptyPlannerOutput(purpose: string): PlannerOutput {
 /** Cache OpenAI clients by (layer, model, temperature) tuple. */
 const llmClientCache = new Map<string, LLMClient>();
 
+function isSessionOpen(user: { sessionWindowExpiresAt?: Date | null }, now: Date): boolean {
+  return !!user.sessionWindowExpiresAt && user.sessionWindowExpiresAt.getTime() > now.getTime();
+}
+
 function resolveLlmClient(context: EngineContext, model: LlmModelType): LLMClient | undefined {
   const cfg = context.llmConfig;
   if (!cfg?.enabled) return undefined;
@@ -678,6 +682,12 @@ export async function processInbound(
       cycleDay,
       briefReady: true,
     },
+    outOfSession: !isSessionOpen(user, context.now),
+    templateResolver: context.templateResolver,
+    templateContext: {
+      nickname: user.nickname ?? undefined,
+      firstName: user.nickname ?? undefined,
+    },
   });
 
   // Update check-in budget if active
@@ -911,6 +921,12 @@ export async function handleCheckInTrigger(
       cycleType: cycle.type,
       cycleDay: plannerInput.patientContext.cycleDay,
       briefReady: true,
+    },
+    outOfSession: !isSessionOpen(cycle.user, context.now),
+    templateResolver: context.templateResolver,
+    templateContext: {
+      nickname: cycle.user.nickname ?? undefined,
+      firstName: cycle.user.nickname ?? undefined,
     },
   });
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);

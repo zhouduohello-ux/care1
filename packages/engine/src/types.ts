@@ -3,6 +3,7 @@ import type { PrismaClient, ObservationCategory } from "@carememory/db";
 
 import type { LLMClient, LLMConfig } from "./llm.js";
 import type { QuotaStore } from "./llm-quota.js";
+import type { TemplateResolver } from "./dialogue.js";
 
 export type LlmModelType = "perception" | "planner" | "dialogue" | "safety";
 
@@ -12,6 +13,12 @@ export interface EngineContext {
   quotaStore?: QuotaStore;
   createExportToken?: (userId: string) => Promise<string>;
   webBaseUrl?: string;
+  /**
+   * Optional platform-specific template resolver. When provided, L5 can render
+   * `content.type === "template"` messages for platforms that require pre-approved
+   * templates outside the 24h session window.
+   */
+  templateResolver?: TemplateResolver;
   /**
    * Unified LLM configuration. Set once at startup via `loadLLMConfig()`.
    * The engine internally resolves the right `LLMClient` per layer with caching.

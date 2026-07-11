@@ -6,6 +6,7 @@ import type { InboundMessage, Platform } from "@carememory/im-core";
 import { createExportTokenFactory } from "../lib/export-token.js";
 import { loadLLMConfig } from "@carememory/engine";
 import { listPersonas, loadPersona } from "../test-tool/persona-library.js";
+import { whatsappTemplateResolver } from "../lib/template-resolver.js";
 
 const SimulateMessageSchema = z.object({
   userId: z.string(),
@@ -75,6 +76,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
       createExportToken: createExportTokenFactory(fastify),
       webBaseUrl: process.env.API_BASE_URL ?? "http://localhost:3055",
       llmConfig: loadLLMConfig(),
+      templateResolver: whatsappTemplateResolver,
     };
   }
 
@@ -141,7 +143,7 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
           });
         }
 
-        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: newNow, llmConfig: loadLLMConfig() }, cycle.id);
+        const msgs = await handleCheckInTrigger({ prisma: fastify.prisma, now: newNow, llmConfig: loadLLMConfig(), templateResolver: whatsappTemplateResolver }, cycle.id);
         outboundMessages.push(...msgs);
 
         // If the engine did not schedule a next check-in (e.g. the cycle has no user bucket yet),

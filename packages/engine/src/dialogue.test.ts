@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { renderMessage } from "./dialogue.js";
 import type { PlannerOutput } from "./types.js";
-import { DEFAULT_PLATFORM_CAPABILITIES, type PlatformCapability } from "@carememory/im-core";
+import { DEFAULT_PLATFORM_CAPABILITIES, type PlatformCapability, type OutboundMessage } from "@carememory/im-core";
 import type { LLMClient } from "./llm.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -487,6 +487,68 @@ describe("renderMessage", async () => {
 
       expect(message.content.text).toContain("treial 7 diwrnod");
       expect(message.content.text).toContain("Cerdyn Clefyd");
+    });
+  });
+
+  describe("out-of-session template conversion", async () => {
+    const mockResolver = {
+      resolve: vi.fn((message: OutboundMessage) => ({
+        templateName: "carememory_plain_text",
+        templateVariables: { body: message.content.text },
+      })),
+    };
+
+    it("converts text message to template when out of session and resolver provided", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks for checking in." });
+      const message = await renderMessage("user_1", output, {
+        outOfSession: true,
+        templateResolver: mockResolver,
+      });
+
+      expect(message.content.type).toBe("template");
+      expect(message.content.templateName).toBe("carememory_plain_text");
+      expect(message.conversationContext.requiresSession).toBe(false);
+    });
+
+    it("serializes buttons into template body when out of session", async () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "activity_limitation",
+        expectedResponseType: "single_choice",
+        options: ["activity_no", "activity_yes"],
+      });
+      const message = await renderMessage("user_1", output, {
+        capability: whatsappCapability,
+        outOfSession: true,
+        templateResolver: mockResolver,
+      });
+
+      expect(message.content.type).toBe("template");
+      expect(message.content.text).toContain("No limitation (reply activity_no)");
+      expect(message.content.text).toContain("Yes, limited (reply activity_yes)");
+    });
+
+    it("does not convert when outOfSession is false", async () => {
+      mockResolver.resolve.mockClear();
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks." });
+      const message = await renderMessage("user_1", output, {
+        outOfSession: false,
+        templateResolver: mockResolver,
+      });
+
+      expect(message.content.type).toBe("text");
+      expect(mockResolver.resolve).not.toHaveBeenCalled();
+    });
+
+    it("does not convert when capability does not support templates", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks." });
+      const message = await renderMessage("user_1", output, {
+        capability: lineCapability,
+        outOfSession: true,
+        templateResolver: mockResolver,
+      });
+
+      expect(message.content.type).toBe("text");
     });
   });
 
