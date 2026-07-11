@@ -4,6 +4,8 @@ import {
   type InboundMessage,
   type OutboundMessage,
   type Platform,
+  type PlatformCapability,
+  DEFAULT_PLATFORM_CAPABILITIES,
 } from "@carememory/im-core";
 import { WhatsAppSender } from "./sender.js";
 
@@ -13,6 +15,7 @@ export * from "./templates.js";
 
 export class WhatsAppAdapter implements IMAdapter {
   readonly platform: Platform = "whatsapp";
+  readonly capability: PlatformCapability = DEFAULT_PLATFORM_CAPABILITIES.whatsapp;
 
   parseWebhook(payload: unknown): InboundMessage | InboundMessage[] {
     const body = payload as Record<string, unknown>;
