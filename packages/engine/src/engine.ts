@@ -9,6 +9,13 @@ import { safetyCheck } from "./safety.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
 import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
+import {
+  pendingQuestionFromPlannerOutput,
+  getPendingQuestion,
+  isAnswerToPendingQuestion,
+  buildRepromptMessage,
+  type PendingQuestion,
+} from "./turn-manager.js";
 import { hasLlmQuota, incrementLlmQuota } from "./llm-quota.js";
 import { scheduleNextCheckInOffset, getBucket } from "./experiments.js";
 import {
@@ -639,6 +646,32 @@ export async function processInbound(
     );
   }
 
+  // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
+  if (activeCheckIn) {
+    const pending = await getPendingQuestion(prisma, activeCheckIn.id);
+    if (pending && !isAnswerToPendingQuestion(message, perception, pending)) {
+      const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+      const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+      const reprompt = await buildRepromptMessage(userId, pending, {
+        style: conversationStyle,
+        locale: user.locale,
+        cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+        outOfSession: !isSessionOpen(user, context.now),
+        templateResolver: context.templateResolver,
+        templateContext: {
+          nickname: user.nickname ?? undefined,
+          firstName: user.nickname ?? undefined,
+        },
+      });
+      const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+      await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, pending);
+      return {
+        messages,
+        trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+      };
+    }
+  }
+
   // L4 Planner
   const latestNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
@@ -706,7 +739,16 @@ export async function processInbound(
   }
 
   const { messages, summary } = safetyWrapWithSummary(userId, [outbound]);
-  await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+  await saveOutboundMessages(
+    prisma,
+    user.id,
+    messages,
+    cycle.id,
+    new Date(),
+    inboundEventId,
+    perception.traceId,
+    pendingQuestionFromPlannerOutput(plannerOutput)
+  );
 
   // Generate Disease Card and schedule next check-in when session ends
   if (plannerOutput.nextAction.type === "end_session" && activeCheckIn) {
@@ -930,7 +972,16 @@ export async function handleCheckInTrigger(
     },
   });
   const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
-  await saveOutboundMessages(prisma, cycle.userId, messages, cycle.id, new Date(), checkIn.id);
+  await saveOutboundMessages(
+    prisma,
+    cycle.userId,
+    messages,
+    cycle.id,
+    new Date(),
+    checkIn.id,
+    undefined,
+    pendingQuestionFromPlannerOutput(plannerOutput)
+  );
 
   // Mark check-in as SENT now that messages have been sent
   await prisma.checkIn.update({

@@ -42,7 +42,8 @@ export async function saveOutboundMessages(
   cycleId?: string,
   now: Date = new Date(),
   salt?: string,
-  traceId?: string
+  traceId?: string,
+  pendingQuestion?: import("./turn-manager.js").PendingQuestion
 ): Promise<string[]> {
   const keys: string[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -58,6 +59,7 @@ export async function saveOutboundMessages(
         payload: {
           ...message,
           _deliveryStatus: "pending",
+          ...(pendingQuestion ? { _pendingQuestion: pendingQuestion } : {}),
         } as unknown as Prisma.InputJsonValue,
         idempotencyKey,
         traceId,
