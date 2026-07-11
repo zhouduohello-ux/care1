@@ -641,4 +641,83 @@ describe("renderMessage", async () => {
       );
     });
   });
+
+
+  describe("render trace", async () => {
+    it("emits trace with input/output/context", async () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "nighttime_symptoms",
+        expectedResponseType: "single_choice",
+        options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      });
+      const onRenderTrace = vi.fn();
+      await renderMessage("user_1", output, {
+        capability: whatsappCapability,
+        style: "v2",
+        locale: "en-GB",
+        cycleContext: { cycleType: "TRIAL_7_DAY", cycleDay: 3 },
+        onRenderTrace,
+      });
+
+      expect(onRenderTrace).toHaveBeenCalledTimes(1);
+      expect(onRenderTrace).toHaveBeenCalledWith({
+        input: {
+          actionType: "ask",
+          topic: "nighttime_symptoms",
+          expectedResponseType: "single_choice",
+          optionCount: 4,
+        },
+        output: {
+          contentType: "list",
+          priority: "normal",
+          requiresSession: true,
+          templated: false,
+          polished: false,
+        },
+        context: {
+          style: "v2",
+          locale: "en-GB",
+          cycleType: "TRIAL_7_DAY",
+          cycleDay: 3,
+        },
+      });
+    });
+
+    it("marks polished true when LLM polish runs", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thank you." });
+      const llmClient = mockLlm("Thanks!");
+      const onRenderTrace = vi.fn();
+      await renderMessage("user_1", output, {
+        enableLlmPolish: true,
+        llmClient,
+        onRenderTrace,
+      });
+
+      expect(onRenderTrace).toHaveBeenCalledTimes(1);
+      const trace = onRenderTrace.mock.calls[0][0];
+      expect(trace.output.polished).toBe(true);
+    });
+
+    it("marks templated true when out-of-session template is applied", async () => {
+      const output = makePlannerOutput({ type: "end_session", purpose: "Thanks." });
+      const onRenderTrace = vi.fn();
+      const resolver = {
+        resolve: vi.fn((message: OutboundMessage) => ({
+          templateKey: "plain_text",
+          templateVariables: { body: message.content.text },
+        })),
+      };
+      await renderMessage("user_1", output, {
+        capability: whatsappCapability,
+        outOfSession: true,
+        templateResolver: resolver,
+        onRenderTrace,
+      });
+
+      const trace = onRenderTrace.mock.calls[0][0];
+      expect(trace.output.templated).toBe(true);
+      expect(trace.output.requiresSession).toBe(false);
+    });
+  });
 });

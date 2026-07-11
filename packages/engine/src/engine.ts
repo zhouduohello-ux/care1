@@ -778,7 +778,10 @@ export async function processInbound(
 
   // L5 Dialogue
   const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-  const outbound = await renderMessage(userId, plannerOutput, {
+  let dialogueTrace: import("./types.js").DialogueTrace | undefined;
+  let outbound: OutboundMessage;
+  try {
+    outbound = await renderMessage(userId, plannerOutput, {
     style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
     locale: user.locale,
     cycleContext: {
@@ -792,7 +795,26 @@ export async function processInbound(
       nickname: user.nickname ?? undefined,
       firstName: user.nickname ?? undefined,
     },
+    onRenderTrace: (trace) => {
+      dialogueTrace = trace;
+    },
   });
+  } catch (err) {
+    console.error("L5 render failed, falling back to safe message", {
+      userId,
+      cycleId: cycle.id,
+      nextAction: plannerOutput.nextAction,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    outbound = {
+      userId,
+      conversationContext: { requiresSession: true, priority: "normal" },
+      content: {
+        type: "text",
+        text: "I'm sorry, I couldn't prepare a reply right now. Please try again or contact your healthcare team if you need help.",
+      },
+    };
+  }
 
   // Update check-in budget if active
   if (activeCheckIn && plannerOutput.nextAction.budgetCost > 0) {
@@ -946,7 +968,7 @@ export async function processInbound(
 
   return {
     messages,
-    trace: { perception, planner: plannerOutput, safety: summary },
+    trace: { perception, planner: plannerOutput, dialogue: dialogueTrace, safety: summary },
   };
 }
 

@@ -132,9 +132,32 @@ export interface SafetyResult {
   blockReason?: string;
 }
 
+export interface DialogueTrace {
+  input: {
+    actionType: PlannerOutput["nextAction"]["type"];
+    topic: string;
+    expectedResponseType?: string;
+    optionCount?: number;
+  };
+  output: {
+    contentType: OutboundMessage["content"]["type"];
+    priority: "normal" | "urgent";
+    requiresSession: boolean;
+    templated: boolean;
+    polished: boolean;
+  };
+  context: {
+    style: string;
+    locale: string;
+    cycleType?: string;
+    cycleDay?: number;
+  };
+}
+
 export interface EngineTrace {
   perception: PerceptionResult;
   planner: PlannerOutput;
+  dialogue?: DialogueTrace;
   safety: SafetyResult;
 }
 

@@ -1,6 +1,6 @@
 import type { OutboundMessage, PlatformCapability } from "@carememory/im-core";
 import { DEFAULT_PLATFORM_CAPABILITIES } from "@carememory/im-core";
-import type { PlannerOutput } from "./types.js";
+import type { PlannerOutput, DialogueTrace } from "./types.js";
 import { styleText, type ConversationStyle } from "./dialogue-styles.js";
 import {
   getLocale,
@@ -43,6 +43,8 @@ export interface RenderOptions {
   outOfSession?: boolean;
   templateResolver?: TemplateResolver;
   templateContext?: TemplateContext;
+  /** Optional callback to emit a structured trace of the L5 render decision. */
+  onRenderTrace?: (trace: DialogueTrace) => void;
 }
 
 export async function renderMessage(
@@ -50,13 +52,17 @@ export async function renderMessage(
   plannerOutput: PlannerOutput,
   options: RenderOptions = {}
 ): Promise<OutboundMessage> {
+  validatePlannerOutput(plannerOutput);
+
   const action = plannerOutput.nextAction;
   const capability = options.capability ?? DEFAULT_PLATFORM_CAPABILITIES.whatsapp;
   const locale = getLocale(options.locale);
+  let polished = false;
+  let message: OutboundMessage;
 
   if (action.type === "safety_response") {
     // Safety responses bypass LLM polish to guarantee exact wording and fast path.
-    return {
+    message = {
       userId,
       conversationContext: { requiresSession: true, priority: "urgent" },
       content: {
@@ -64,45 +70,35 @@ export async function renderMessage(
         text: styleText(action.purpose, options.style ?? "v1", "safety", locale),
       },
     };
-  }
-
-  if (action.type === "end_session") {
+  } else if (action.type === "end_session") {
     const closingText = resolveClosingText(action.purpose, locale, options.cycleContext);
-    const polished = await polishIfEnabled(
+    const rawText = styleText(closingText, options.style ?? "v1", "closing", locale);
+    const { message: polishedMessage, polished: didPolish } = await polishIfEnabled(
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
-        content: {
-          type: "text",
-          text: styleText(closingText, options.style ?? "v1", "closing", locale),
-        },
+        content: { type: "text", text: rawText },
       },
       { intent: "closing", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
     );
-    return applyTemplateIfNeeded(polished, capability, options, locale);
-  }
-
-  if (action.type === "generate_brief") {
-    const polished = await polishIfEnabled(
+    polished = didPolish;
+    message = applyTemplateIfNeeded(polishedMessage, capability, options, locale);
+  } else if (action.type === "generate_brief") {
+    const rawText = resolveBriefReadyText(action.purpose, locale, options.cycleContext?.briefUrl);
+    const { message: polishedMessage, polished: didPolish } = await polishIfEnabled(
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
-        content: {
-          type: "text",
-          text: resolveBriefReadyText(action.purpose, locale, options.cycleContext?.briefUrl),
-        },
+        content: { type: "text", text: rawText },
       },
       { intent: "inform", locale, llmClient: options.llmClient, onLlmCall: options.onLlmCall, enabled: options.enableLlmPolish }
     );
-    return applyTemplateIfNeeded(polished, capability, options, locale);
-  }
-
-  if (action.type === "ask" && action.expectedResponseType === "scale") {
+    polished = didPolish;
+    message = applyTemplateIfNeeded(polishedMessage, capability, options, locale);
+  } else if (action.type === "ask" && action.expectedResponseType === "scale") {
     const rendered = renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1", locale);
-    return applyTemplateIfNeeded(rendered, capability, options, locale);
-  }
-
-  if (action.type === "ask" && action.expectedResponseType === "single_choice" && action.options) {
+    message = applyTemplateIfNeeded(rendered, capability, options, locale);
+  } else if (action.type === "ask" && action.expectedResponseType === "single_choice" && action.options) {
     const rendered = renderSingleChoiceQuestion(
       userId,
       action.purpose,
@@ -113,10 +109,8 @@ export async function renderMessage(
       locale,
       options.listActionButtonTitle
     );
-    return applyTemplateIfNeeded(rendered, capability, options, locale);
-  }
-
-  if (action.type === "ask" && action.expectedResponseType === "multi_select" && action.options) {
+    message = applyTemplateIfNeeded(rendered, capability, options, locale);
+  } else if (action.type === "ask" && action.expectedResponseType === "multi_select" && action.options) {
     const rendered = renderMultiSelectQuestion(
       userId,
       action.purpose,
@@ -126,27 +120,67 @@ export async function renderMessage(
       options.style ?? "v1",
       locale
     );
-    return applyTemplateIfNeeded(rendered, capability, options, locale);
+    message = applyTemplateIfNeeded(rendered, capability, options, locale);
+  } else {
+    const rawText = styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform", locale);
+    const { message: polishedMessage, polished: didPolish } = await polishIfEnabled(
+      {
+        userId,
+        conversationContext: { requiresSession: true, priority: "normal" },
+        content: { type: "text", text: rawText },
+      },
+      {
+        intent: action.type === "ask" ? "question" : "inform",
+        locale,
+        llmClient: options.llmClient,
+        onLlmCall: options.onLlmCall,
+        enabled: options.enableLlmPolish,
+      }
+    );
+    polished = didPolish;
+    message = applyTemplateIfNeeded(polishedMessage, capability, options, locale);
   }
 
-  const fallback = await polishIfEnabled(
-    {
-      userId,
-      conversationContext: { requiresSession: true, priority: "normal" },
-      content: {
-        type: "text",
-        text: styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform", locale),
+  if (options.onRenderTrace) {
+    const templated = message.content.type === "template";
+    const trace: DialogueTrace = {
+      input: {
+        actionType: action.type,
+        topic: action.topic,
+        expectedResponseType: action.expectedResponseType,
+        optionCount: action.options?.length,
       },
-    },
-    {
-      intent: action.type === "ask" ? "question" : "inform",
-      locale,
-      llmClient: options.llmClient,
-      onLlmCall: options.onLlmCall,
-      enabled: options.enableLlmPolish,
-    }
-  );
-  return applyTemplateIfNeeded(fallback, capability, options, locale);
+      output: {
+        contentType: message.content.type,
+        priority: message.conversationContext.priority,
+        requiresSession: message.conversationContext.requiresSession,
+        templated,
+        polished,
+      },
+      context: {
+        style: options.style ?? "v1",
+        locale: locale.code,
+        cycleType: options.cycleContext?.cycleType,
+        cycleDay: options.cycleContext?.cycleDay,
+      },
+    };
+    options.onRenderTrace(trace);
+  }
+
+  return message;
+}
+
+
+function validatePlannerOutput(output: PlannerOutput): void {
+  if (!output.nextAction) {
+    throw new Error("L5 render failed: PlannerOutput.nextAction is required");
+  }
+  if (!output.nextAction.type) {
+    throw new Error("L5 render failed: PlannerOutput.nextAction.type is required");
+  }
+  if (output.nextAction.purpose === undefined || output.nextAction.purpose === null) {
+    throw new Error("L5 render failed: PlannerOutput.nextAction.purpose is required");
+  }
 }
 
 function renderScaleQuestion(
@@ -393,12 +427,17 @@ interface PolishIfEnabledOptions {
   enabled?: boolean;
 }
 
+interface PolishIfEnabledResult {
+  message: OutboundMessage;
+  polished: boolean;
+}
+
 async function polishIfEnabled(
   message: OutboundMessage,
   options: PolishIfEnabledOptions
-): Promise<OutboundMessage> {
+): Promise<PolishIfEnabledResult> {
   if (!options.enabled || !options.llmClient || message.content.type !== "text") {
-    return message;
+    return { message, polished: false };
   }
 
   const { polishMessage } = await import("./dialogue-llm-polish.js");
@@ -410,7 +449,10 @@ async function polishIfEnabled(
   });
 
   return {
-    ...message,
-    content: { ...message.content, text: polishedText },
+    message: {
+      ...message,
+      content: { ...message.content, text: polishedText },
+    },
+    polished: true,
   };
 }
