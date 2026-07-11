@@ -1,0 +1,31 @@
+{
+  "id": "turn_manager_reprompt",
+  "name": "Turn Manager reprompts on off-topic reply",
+  "description": "When the user replies to a check-in question with an off-topic answer, the Turn Manager reprompts with the pending question before moving on.",
+  "user": {
+    "phoneNumber": "test_turn_manager"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "not sure" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "I didn't catch that",
+      "description": "Turn Manager reprompts the pending question after an off-topic reply"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "night",
+      "caseInsensitive": true,
+      "description": "Reprompt retains the original nighttime symptoms topic"
+    }
+  ]
+}
