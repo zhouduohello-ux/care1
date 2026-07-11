@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import type { PerceptionResult, PlannerOutput } from "./types.js";
+import type { LLMClient } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
   isAnswerToPendingQuestion,
+  isAnswerRelevantWithLlm,
   buildRepromptMessage,
   classifyNonAnswer,
   getTurnState,
@@ -110,6 +112,27 @@ describe("isAnswerToPendingQuestion", () => {
     const pending = { topic: "severity", purpose: "Rate severity.", expectedResponseType: "scale" as const, options: ["1", "2", "3", "4", "5"], askedAt: "" };
     expect(isAnswerToPendingQuestion(makeInbound({ text: "3" }), makePerception(), pending)).toBe(true);
     expect(isAnswerToPendingQuestion(makeInbound({ text: "6" }), makePerception(), pending)).toBe(false);
+  });
+
+  it("accepts scale described with words", () => {
+    const pending = { topic: "severity", purpose: "Rate severity.", expectedResponseType: "scale" as const, options: ["1", "2", "3", "4", "5"], askedAt: "" };
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "severe" }), makePerception(), pending, "en-GB")).toBe(true);
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "very bad" }), makePerception(), pending, "en-GB")).toBe(true);
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "okay" }), makePerception(), pending, "en-GB")).toBe(true);
+  });
+
+  it("accepts single_choice by synonym", () => {
+    const pending = { topic: "nighttime_symptoms", purpose: "Night symptoms?", expectedResponseType: "single_choice" as const, options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"], askedAt: "" };
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "woke me up" }), makePerception(), pending, "en-GB")).toBe(true);
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "kept me awake" }), makePerception(), pending, "en-GB")).toBe(true);
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "none" }), makePerception(), pending, "en-GB")).toBe(true);
+  });
+
+  it("accepts multi_select by synonym and natural language", () => {
+    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen and exercise" }), makePerception(), pending, "en-GB")).toBe(true);
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen, dust" }), makePerception(), pending, "en-GB")).toBe(true);
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen and smoke" }), makePerception(), pending, "en-GB")).toBe(false);
   });
 
   it("accepts multi_select when all tokens match options", () => {
@@ -256,5 +279,46 @@ describe("setPendingQuestion", () => {
 describe("MAX_REPROMPTS", () => {
   it("is set to 2", () => {
     expect(MAX_REPROMPTS).toBe(2);
+  });
+});
+
+function mockLlm(responseJson: string): LLMClient {
+  return {
+    modelName: "mock-relevance",
+    complete: vi.fn().mockResolvedValue({
+      content: responseJson,
+      usage: { promptTokens: 20, completionTokens: 5, totalTokens: 25 },
+    }),
+  };
+}
+
+describe("isAnswerRelevantWithLlm", () => {
+  const pending = { topic: "activity_limitation", purpose: "Were you limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+
+  it("returns true when LLM says the reply is an answer", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true, reasoning: "The user says they could not run." }));
+    const result = await isAnswerRelevantWithLlm(makeInbound({ text: "I couldn't run today" }), makePerception(), pending, client);
+    expect(result.isAnswer).toBe(true);
+    expect(client.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns false when LLM says the reply is not an answer", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: false, reasoning: "The user asks a clarifying question." }));
+    const result = await isAnswerRelevantWithLlm(makeInbound({ text: "What do you mean?" }), makePerception(), pending, client);
+    expect(result.isAnswer).toBe(false);
+  });
+
+  it("returns false on LLM failure / invalid JSON", async () => {
+    const client = { modelName: "bad", complete: vi.fn().mockRejectedValue(new Error("timeout")) } as unknown as LLMClient;
+    const result = await isAnswerRelevantWithLlm(makeInbound({ text: "whatever" }), makePerception(), pending, client);
+    expect(result.isAnswer).toBe(false);
+  });
+
+  it("calls onLlmCall audit callback", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true }));
+    const onLlmCall = vi.fn();
+    await isAnswerRelevantWithLlm(makeInbound({ text: "yes" }), makePerception(), pending, client, onLlmCall);
+    expect(onLlmCall).toHaveBeenCalledTimes(1);
+    expect(onLlmCall).toHaveBeenCalledWith("mock-relevance", expect.any(Array), expect.any(String), expect.any(Object));
   });
 });

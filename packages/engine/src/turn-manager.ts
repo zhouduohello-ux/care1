@@ -2,6 +2,9 @@ import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { Prisma, type PrismaClient } from "@carememory/db";
 import type { PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
+import { matchOptionSynonym, matchScaleWord, getLocale } from "./dialogue-locales/index.js";
+import type { LLMClient, LLMMessage } from "./llm.js";
+import type { LlmAuditCallback } from "./perception.js";
 
 export interface PendingQuestion {
   topic: string;
@@ -46,8 +49,10 @@ export async function getTurnState(prisma: PrismaClient, checkInId: string): Pro
 export function isAnswerToPendingQuestion(
   message: InboundMessage,
   perception: PerceptionResult,
-  pending: PendingQuestion
+  pending: PendingQuestion,
+  localeCode?: string
 ): boolean {
+  const locale = localeCode ? getLocale(localeCode) : undefined;
   const nonAnswerIntents = new Set([
     "question",
     "help",
@@ -75,16 +80,31 @@ export function isAnswerToPendingQuestion(
 
   const text = (message.content.text ?? "").trim().toLowerCase();
   if (pending.expectedResponseType === "scale") {
-    return /^[1-5]$/.test(text);
+    if (/^[1-5]$/.test(text)) return true;
+    return locale ? matchScaleWord(locale, text) !== undefined : false;
   }
 
   if (pending.expectedResponseType === "single_choice") {
     if (optionSet.has(text)) return true;
+    if (locale) {
+      return options.some((optionId) => matchOptionSynonym(locale, optionId, text));
+    }
   }
 
   if (pending.expectedResponseType === "multi_select") {
-    const tokens = text.split(/[,\s]+/).filter(Boolean);
-    return tokens.length > 0 && tokens.every((t) => optionSet.has(t));
+    // Split on commas, the word "and", or whitespace.
+    const tokens = text
+      .split(/,|\band\b|\s+/i)
+      .map((t) => t.trim())
+      .filter(Boolean);
+    if (tokens.length === 0) return false;
+
+    return tokens.every((token) =>
+      options.some((optionId) =>
+        token === optionId.toLowerCase() ||
+        (locale ? matchOptionSynonym(locale, optionId, token) : false)
+      )
+    );
   }
 
   // Accept free-text replies when perception extracted an observation for the pending topic.
@@ -93,6 +113,55 @@ export function isAnswerToPendingQuestion(
   }
 
   return false;
+}
+
+export interface LlmRelevanceResult {
+  isAnswer: boolean;
+  /** Natural language explanation, not shown to the user. */
+  reasoning?: string;
+}
+
+export async function isAnswerRelevantWithLlm(
+  message: InboundMessage,
+  perception: PerceptionResult,
+  pending: PendingQuestion,
+  llmClient: LLMClient,
+  onLlmCall?: LlmAuditCallback
+): Promise<LlmRelevanceResult> {
+  const systemPrompt = `You are the turn-management layer of CareMemory, a UK asthma follow-up assistant.
+Your job is to decide whether a patient's free-text reply answers a specific check-in question.
+Return ONLY valid JSON matching this schema:
+{
+  "isAnswer": boolean,
+  "reasoning": string
+}
+Rules:
+- Return isAnswer=true if the reply contains the information the question is asking for, even if phrased informally.
+- Return isAnswer=false if the reply is off-topic, asks a question, asks for help, or does not address the question.
+- Do not diagnose or give treatment advice.`;
+
+  const userPrompt = `Question purpose: ${pending.purpose}
+Expected response type: ${pending.expectedResponseType}
+Allowed options: ${JSON.stringify(pending.options ?? [])}
+Patient reply: ${message.content.text ?? ""}
+Perception extracted observations: ${JSON.stringify(perception.extractedObservations)}`;
+
+  const messages: LLMMessage[] = [
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ];
+
+  try {
+    const { content, usage } = await llmClient.complete(messages, { responseFormat: "json", temperature: 0.1 });
+    if (onLlmCall) {
+      await onLlmCall(llmClient.modelName, messages, content, usage);
+    }
+    const parsed = JSON.parse(content) as Partial<LlmRelevanceResult>;
+    return { isAnswer: !!parsed.isAnswer, reasoning: parsed.reasoning };
+  } catch {
+    // Any LLM failure is treated as "not an answer" so we fallback to reprompt.
+    return { isAnswer: false };
+  }
 }
 
 export function classifyNonAnswer(perception: PerceptionResult): string {

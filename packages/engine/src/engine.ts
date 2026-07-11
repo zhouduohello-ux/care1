@@ -13,6 +13,7 @@ import {
   pendingQuestionFromPlannerOutput,
   getTurnState,
   isAnswerToPendingQuestion,
+  isAnswerRelevantWithLlm,
   buildRepromptMessage,
   classifyNonAnswer,
   recordReprompt,
@@ -654,7 +655,7 @@ export async function processInbound(
   // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
   if (activeCheckIn) {
     const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
-    if (pending && !isAnswerToPendingQuestion(message, perception, pending)) {
+    if (pending && !isAnswerToPendingQuestion(message, perception, pending, user.locale)) {
       const nextRepromptCount = repromptCount + 1;
 
       if (nextRepromptCount > MAX_REPROMPTS) {
@@ -678,36 +679,66 @@ export async function processInbound(
         );
         await clearPendingQuestion(prisma, activeCheckIn.id);
       } else {
-        const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
-        const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-        const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, {
-          style: conversationStyle,
-          locale: user.locale,
-          cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
-          outOfSession: !isSessionOpen(user, context.now),
-          templateResolver: context.templateResolver,
-          templateContext: {
-            nickname: user.nickname ?? undefined,
-            firstName: user.nickname ?? undefined,
-          },
-        });
-        const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-        await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
-        await recordReprompt(
-          prisma,
-          user.id,
-          cycle.id,
-          activeCheckIn.id,
-          pending,
-          nextRepromptCount,
-          classifyNonAnswer(perception),
-          context.now,
-          perception.traceId
-        );
-        return {
-          messages,
-          trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-        };
+        // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
+        // accept it and move on instead of reprompting.
+        const dialogueLlmClient = resolveLlmClient(context, "dialogue");
+        let acceptedByLlm = false;
+        if (allowLlm && dialogueLlmClient) {
+          const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
+          if (relevance.isAnswer) {
+            await saveObservations(
+              prisma,
+              user.id,
+              cycle.id,
+              inboundEventId,
+              [
+                {
+                  category: "subjective",
+                  concept: pending.topic,
+                  value: message.content.text ?? "yes",
+                  confidence: 0.8,
+                  extractedBy: "llm",
+                },
+              ],
+              context.now
+            );
+            await clearPendingQuestion(prisma, activeCheckIn.id);
+            acceptedByLlm = true;
+          }
+        }
+
+        if (!acceptedByLlm) {
+          const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+          const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+          const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, {
+            style: conversationStyle,
+            locale: user.locale,
+            cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+            outOfSession: !isSessionOpen(user, context.now),
+            templateResolver: context.templateResolver,
+            templateContext: {
+              nickname: user.nickname ?? undefined,
+              firstName: user.nickname ?? undefined,
+            },
+          });
+          const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+          await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+          await recordReprompt(
+            prisma,
+            user.id,
+            cycle.id,
+            activeCheckIn.id,
+            pending,
+            nextRepromptCount,
+            classifyNonAnswer(perception),
+            context.now,
+            perception.traceId
+          );
+          return {
+            messages,
+            trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+          };
+        }
       }
     }
   }
