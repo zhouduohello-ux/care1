@@ -1,0 +1,33 @@
+{
+  "id": "pending_question_timeout",
+  "name": "Pending question expires after 24 hours of no reply",
+  "description": "When a user leaves a check-in question unanswered for more than 24 hours, the scheduler marks it as no_answer, clears the pending question, and sets the check-in to MISSED.",
+  "user": {
+    "phoneNumber": "test_pending_timeout"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "not sure" },
+    { "action": "advance", "to": "2026-07-13T10:00:00.000Z" },
+    { "action": "trigger_expired_pending" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "Off-topic reply triggers a reprompt and sets a pending question"
+    },
+    {
+      "afterStep": 6,
+      "type": "observation",
+      "op": "exists",
+      "filter": { "concept": "nighttime_symptoms", "value": "no_answer" },
+      "description": "Expired pending question is recorded as no_answer"
+    }
+  ]
+}

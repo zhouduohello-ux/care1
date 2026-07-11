@@ -23,6 +23,7 @@
     "test:e2e:brief": "tsx tests/scenarios/run-scenario.ts tests/scenarios/brief-pdf-e2e.json",
     "test:e2e:cross-cycle": "tsx tests/scenarios/run-scenario.ts tests/scenarios/cross-cycle-late-reply.json",
     "test:e2e:7day": "tsx tests/scenarios/run-scenario.ts tests/scenarios/full-7-day-trial.json",
+    "test:e2e:pending-timeout": "tsx tests/scenarios/run-scenario.ts tests/scenarios/pending-question-timeout.json",
     "test:e2e:staging": "tsx tests/scenarios/run-all.ts",
     "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
     "typecheck": "turbo run typecheck"

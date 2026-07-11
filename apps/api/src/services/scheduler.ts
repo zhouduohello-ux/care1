@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@carememory/db";
+import { Prisma, type PrismaClient } from "@carememory/db";
 import { handleCheckInTrigger, scheduleNextCheckInOffset, loadLLMConfig, type QuotaStore } from "@carememory/engine";
 import type { Redis } from "ioredis";
 import * as Sentry from "@sentry/node";
@@ -8,7 +8,7 @@ import { dispatchOutboundMessages } from "../lib/dispatch-outbound.js";
 
 export const SCHEDULER_QUEUE_NAME = "carememory-scheduler";
 
-export type SchedulerJobName = "scan-checkins" | "scan-reminders";
+export type SchedulerJobName = "scan-checkins" | "scan-reminders" | "scan-expired-pending";
 
 export interface Scheduler {
   queue: Queue;
@@ -49,6 +49,67 @@ export async function processDueCheckIns(
     await prisma.cycle.update({
       where: { id: cycle.id },
       data: { nextCheckinAt: scheduleNextCheckIn(cycle.user.phoneNumber, now) },
+    });
+  }
+}
+
+export async function processExpiredPendingQuestions(
+  prisma: PrismaClient,
+  now: Date,
+  opts: { timeoutMs?: number } = {}
+) {
+  const timeoutMs = opts.timeoutMs ?? 24 * 60 * 60 * 1000;
+  const deadline = new Date(now.getTime() - timeoutMs);
+
+  const expired = await prisma.checkIn.findMany({
+    where: {
+      status: "SENT",
+      sentAt: { lte: deadline },
+      pendingQuestion: { not: Prisma.JsonNull },
+    },
+    include: { cycle: { include: { user: true } } },
+  });
+
+  for (const checkIn of expired) {
+    const pending = checkIn.pendingQuestion as { topic?: string } | null;
+    const topic = pending?.topic;
+    if (!topic || !checkIn.cycle) continue;
+
+    await prisma.observation.create({
+      data: {
+        userId: checkIn.cycle.userId,
+        cycleId: checkIn.cycleId,
+        eventId: checkIn.id,
+        timestamp: now,
+        category: "subjective",
+        concept: topic,
+        value: "no_answer",
+        confidence: 1,
+        extractedBy: "rule",
+      },
+    });
+
+    await prisma.checkIn.update({
+      where: { id: checkIn.id },
+      data: {
+        pendingQuestion: Prisma.JsonNull,
+        status: "MISSED",
+      },
+    });
+
+    await prisma.event.create({
+      data: {
+        userId: checkIn.cycle.userId,
+        cycleId: checkIn.cycleId,
+        checkInId: checkIn.id,
+        type: "state_updated",
+        payload: {
+          reason: "pending_question_expired",
+          topic,
+          timeoutMs,
+        } as unknown as Prisma.InputJsonValue,
+        timestamp: now,
+      },
     });
   }
 }
@@ -94,6 +155,9 @@ export function createProcessor(deps: { prisma: PrismaClient; clock: Clock; quot
         break;
       case "scan-reminders":
         await processDueReminders(deps.prisma, deps.clock);
+        break;
+      case "scan-expired-pending":
+        await processExpiredPendingQuestions(deps.prisma, deps.clock.now());
         break;
       default:
         throw new Error(`Unknown scheduler job name: ${job.name}`);
@@ -143,6 +207,11 @@ export async function startScheduler(
     "scan-reminders",
     { every: intervalMs },
     { name: "scan-reminders", data: {}, opts: { attempts: 3, backoff: { type: "exponential", delay: 1000 } } }
+  );
+  await queue.upsertJobScheduler(
+    "scan-expired-pending",
+    { every: intervalMs },
+    { name: "scan-expired-pending", data: {}, opts: { attempts: 3, backoff: { type: "exponential", delay: 1000 } } }
   );
 
   return {
