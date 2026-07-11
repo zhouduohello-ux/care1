@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import type { PerceptionResult, PlannerOutput } from "./types.js";
 import type { LLMClient } from "./llm.js";
@@ -12,7 +12,8 @@ import {
   recordReprompt,
   clearPendingQuestion,
   setPendingQuestion,
-  MAX_REPROMPTS,
+  getMaxReprompts,
+  DEFAULT_MAX_REPROMPTS,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -276,9 +277,35 @@ describe("setPendingQuestion", () => {
   });
 });
 
-describe("MAX_REPROMPTS", () => {
-  it("is set to 2", () => {
-    expect(MAX_REPROMPTS).toBe(2);
+describe("getMaxReprompts", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.PENDING_QUESTION_MAX_REPROMPTS;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("defaults to 2", () => {
+    expect(getMaxReprompts()).toBe(DEFAULT_MAX_REPROMPTS);
+    expect(DEFAULT_MAX_REPROMPTS).toBe(2);
+  });
+
+  it("reads from PENDING_QUESTION_MAX_REPROMPTS", () => {
+    process.env.PENDING_QUESTION_MAX_REPROMPTS = "5";
+    expect(getMaxReprompts()).toBe(5);
+  });
+
+  it("falls back to default for invalid values", () => {
+    process.env.PENDING_QUESTION_MAX_REPROMPTS = "not-a-number";
+    expect(getMaxReprompts()).toBe(2);
+    process.env.PENDING_QUESTION_MAX_REPROMPTS = "-1";
+    expect(getMaxReprompts()).toBe(2);
+    process.env.PENDING_QUESTION_MAX_REPROMPTS = "1.5";
+    expect(getMaxReprompts()).toBe(2);
   });
 });
 

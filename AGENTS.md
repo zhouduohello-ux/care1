@@ -365,6 +365,26 @@ LLM_TEMPERATURE_PLANNER=0.1
 
 **注意**：`infra/render.yaml` 与 `turbo.json` 的 `globalEnv` 仍使用旧版命名（如 `DEFAULT_PLANNER_MODEL`、`OPENAI_BASE_URL`），后续应统一迁移到 `LLM_*` 系列。
 
+### 7.6 调度器 / Turn 管理配置
+
+pending question 的 gentle nudge、静默超时与重提示上限可通过环境变量调整：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `PENDING_QUESTION_NUDGE_AFTER_MS` | `43200000`（12h） | check-in 发出后多久发送 gentle nudge |
+| `PENDING_QUESTION_TIMEOUT_MS` | `86400000`（24h） | check-in 发出后多久未回复则记录 `no_answer` 并置为 `MISSED` |
+| `PENDING_QUESTION_MAX_REPROMPTS` | `2` | 用户答非所问时最多重提示几次，之后记录 `no_answer` 并跳过该问题 |
+
+最小示例：
+
+```bash
+PENDING_QUESTION_NUDGE_AFTER_MS=43200000
+PENDING_QUESTION_TIMEOUT_MS=86400000
+PENDING_QUESTION_MAX_REPROMPTS=2
+```
+
+`PENDING_QUESTION_NUDGE_AFTER_MS` / `PENDING_QUESTION_TIMEOUT_MS` 由 `apps/api/src/services/scheduler.ts` 读取；`PENDING_QUESTION_MAX_REPROMPTS` 由 `packages/engine/src/turn-manager.ts` 读取；函数均支持参数覆盖，便于测试。
+
 ---
 
 ## 8. 测试策略
