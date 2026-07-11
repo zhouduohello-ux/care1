@@ -95,6 +95,7 @@ model CheckIn {
   exceptionQuestionsAsked Int         @default(0)
   repromptCount         Int         @default(0)
   pendingQuestion       Json?
+  nudgeSentAt           DateTime?
   reminderSentAt        DateTime?
 
   events           Event[]
