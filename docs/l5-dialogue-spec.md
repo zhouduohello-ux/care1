@@ -1,7 +1,7 @@
 # CareMemory L5 对话层（Dialogue Layer）规格文档
 
 > **文档编号**：SPEC-L5-001  
-> **版本**：v1.1  
+> **版本**：v1.2  
 > **分支**：`feat/l5-dialogue-optimization`  
 > **对应架构层**：L5 Dialogue  
 > **上游**：L4 Planner | **下游**：L6 Safety、IM Adapter（WhatsApp）  
@@ -100,7 +100,7 @@ export interface OutboundMessage {
 | `end_session` | 任意 | 直接展示 `purpose` 作为结束语 | `text` | `normal` | ✅ 已实现 |
 | `ask` | `single_choice` + `options` | 将 `options` 映射为可读按钮标题 | `buttons` | `normal` | ✅ 已实现 |
 | `ask` | `text` | 直接展示 `purpose` 作为开放式问题 | `text` | `normal` | ✅ 已实现 |
-| `ask` | `scale` | 渲染 1–5 分按钮 | `buttons`（建议） | `normal` | ❌ 未实现 |
+| `ask` | `scale` | 渲染 1–5 分按钮（平台不支持时降级为 list） | `buttons` / `list` | `normal` | ✅ 已实现 |
 | `ask` | `multi_select` | 渲染 list 或分步交互 | `list`（建议） | `normal` | ❌ 未实现 |
 | `inform` / `remind` / `generate_brief` | 任意 | 兜底为纯文本 | `text` | `normal` | ⚠️ 兜底 |
 
@@ -183,7 +183,7 @@ L6 Safety（fast path）───► high risk? 直接安全响应
 L4 Planner ──► PlannerOutput
     │
     ▼
-L5 Dialogue ──► renderMessage(userId, plannerOutput) ──► OutboundMessage
+L5 Dialogue ──► renderMessage(userId, plannerOutput, { capability }) ──► OutboundMessage
     │
     ▼
 L6 Safety ──► 最终校验 + 追加急救/免责声明
@@ -304,9 +304,10 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | 单选标签映射 | ✅ 已实现 | `packages/engine/src/dialogue.ts:55-62` |
 | 安全响应渲染 | ✅ 已实现 | `packages/engine/src/dialogue.ts:7-16` |
 | 结束会话渲染 | ✅ 已实现 | `packages/engine/src/dialogue.ts:18-27` |
-| 量表（scale）渲染 | ❌ 未实现 | 规划项 L5-OPT-002 |
-| 多选（multi_select）渲染 | ❌ 未实现 | 规划项 L5-OPT-003 |
-| 列表（list）渲染 | ❌ 未实现 | 规划项 L5-OPT-004 |
+| 量表（scale）渲染 | ✅ 已实现 | `packages/engine/src/dialogue.ts` |
+| 列表（list）渲染 | ✅ 已实现（作为按钮超限自动降级） | `packages/engine/src/dialogue.ts` |
+| 按钮标题超长自动降级 | ✅ 已实现 | `packages/engine/src/dialogue.ts` |
+| 平台 capability 抽象 | ✅ 已实现 | `packages/im-core/src/index.ts` |
 | 模板消息生成 | ❌ 未实现 | 当前由 dispatch 层负责 |
 | 多语言支持 | ❌ 未实现 | 规划项 L5-OPT-005 |
 | A/B 对话风格应用 | ❌ 未实现 | 规划项 L5-OPT-006 |
@@ -319,7 +320,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | ID | 描述 | 影响 | 建议修复 |
 |---|---|---|---|
 | L5-DEBT-001 | 按钮标签映射与 `planner.ts` 中 `CHECKIN_QUESTIONS` 重复定义 | 修改问题文案需改两处 | 抽离到共享 question bank（如 `packages/engine/src/question-bank.ts`） |
-| L5-DEBT-002 | `nighttime_symptoms` 和 `reliever_use` 各有 4 个选项，但 WhatsApp button 上限为 3 | 发送失败或用户看不到全部选项 | 改用 `list` 类型或拆分为两步 |
+| L5-DEBT-002 | `nighttime_symptoms` 和 `reliever_use` 各有 4 个选项，但 WhatsApp button 上限为 3 | 已自动降级为 `list`，但仍需端到端验证 | L5 已根据 `PlatformCapability.maxButtons` 自动降级；保留债务以提醒验证实际 WhatsApp payload |
 | L5-DEBT-003 | L5 不使用 `conversationStyle`（已在 `PlannerInput` 中传递） | A/B 实验的对话风格差异未落地 | 在 L5 根据 style 选择措辞模板 |
 | L5-DEBT-004 | `generate_brief` action 被降级为普通文本 | 无法直接附带 Brief 链接 | 结合 `webBaseUrl` 生成带 token 的链接消息 |
 | L5-DEBT-005 | 没有单元测试覆盖 `dialogue.ts` | 回归风险 | 补充 `packages/engine/src/dialogue.test.ts` |
@@ -395,6 +396,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |---|---|---|---|---|
+| 2026-07-11 | v1.2 | 实现 PlatformCapability 抽象、4 选项自动降级 list、scale 量表渲染、按钮标题超长降级、新增 dialogue 单元测试 | AI Agent |
 | 2026-07-11 | v1.1 | 补充 L4 实际输出类型、L5 通用职责、不经过 L5 的场景及流程速查图 | AI Agent |
 | 2026-07-11 | v1.0 | 初稿：梳理 L5 接口、渲染矩阵、Adapter 映射、已知债务与优化 backlog | AI Agent |
 
