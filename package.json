@@ -25,6 +25,7 @@
     "test:e2e:7day": "tsx tests/scenarios/run-scenario.ts tests/scenarios/full-7-day-trial.json",
     "test:e2e:four-option-list": "tsx tests/scenarios/run-scenario.ts tests/scenarios/four-option-list-fallback.json",
     "test:e2e:turn-manager": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-reprompt.json",
+    "test:e2e:turn-manager-max": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-max-reprompts.json",
     "test:e2e:staging": "tsx tests/scenarios/run-all.ts",
     "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
     "typecheck": "turbo run typecheck"

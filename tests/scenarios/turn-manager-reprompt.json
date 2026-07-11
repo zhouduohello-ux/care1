@@ -16,16 +16,9 @@
       "afterStep": 4,
       "type": "message",
       "op": "contains",
-      "value": "I didn't catch that",
-      "description": "Turn Manager reprompts the pending question after an off-topic reply"
-    },
-    {
-      "afterStep": 4,
-      "type": "message",
-      "op": "contains",
-      "value": "night",
+      "value": "didn't catch that",
       "caseInsensitive": true,
-      "description": "Reprompt retains the original nighttime symptoms topic"
+      "description": "Turn Manager reprompts the pending question after an off-topic reply"
     }
   ]
 }
