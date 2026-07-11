@@ -1,7 +1,7 @@
 # CareMemory L5 对话层（Dialogue Layer）规格文档
 
 > **文档编号**：SPEC-L5-001  
-> **版本**：v1.4  
+> **版本**：v1.5  
 > **分支**：`feat/l5-dialogue-optimization`  
 > **对应架构层**：L5 Dialogue  
 > **上游**：L4 Planner | **下游**：L6 Safety、IM Adapter（WhatsApp）  
@@ -309,6 +309,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | 周期结束提示生成 | ✅ 已实现（`cycleContext` 驱动） | `packages/engine/src/dialogue.ts` |
 | 按钮标题超长自动降级 | ✅ 已实现 | `packages/engine/src/dialogue.ts` |
 | 平台 capability 抽象 | ✅ 已实现 | `packages/im-core/src/index.ts` |
+| Brief 链接消息生成 | ✅ 已实现（`generate_brief` + `briefUrl`） | `packages/engine/src/dialogue.ts` |
 | 模板消息生成 | ❌ 未实现 | 当前由 dispatch 层负责 |
 | 多语言支持 | ❌ 未实现 | 规划项 L5-OPT-005 |
 | A/B 对话风格应用 | ✅ 已实现（规则化 v1/v2） | `packages/engine/src/dialogue-styles.ts` |
@@ -323,7 +324,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | L5-DEBT-001 | 按钮标签映射与 `planner.ts` 中 `CHECKIN_QUESTIONS` 重复定义 | 修改问题文案需改两处 | 抽离到共享 question bank（如 `packages/engine/src/question-bank.ts`） |
 | L5-DEBT-002 | `nighttime_symptoms` 和 `reliever_use` 各有 4 个选项，但 WhatsApp button 上限为 3 | 已自动降级为 `list`，但仍需端到端验证 | L5 已根据 `PlatformCapability.maxButtons` 自动降级；保留债务以提醒验证实际 WhatsApp payload |
 | L5-DEBT-003 | L5 不使用 `conversationStyle` | A/B 实验的对话风格差异未落地 | 已通过 `dialogue-styles.ts` + `renderMessage({ style })` 实现规则化 v1/v2；未来可叠加 LLM polish |
-| L5-DEBT-004 | `generate_brief` action 被降级为普通文本 / engine.ts 直接突变 closing 文案 | 破坏 L5 单一职责 | 周期结束提示已迁移到 L5 的 `cycleContext`；`generate_brief` 链接生成待补充 |
+| L5-DEBT-004 | `generate_brief` action 被降级为普通文本 / engine.ts 直接突变 closing 文案 | 破坏 L5 单一职责 | 已解决：周期结束提示由 `cycleContext` 驱动；Brief 链接由 `generate_brief` + `briefUrl` 生成 |
 | L5-DEBT-005 | 没有单元测试覆盖 `dialogue.ts` | 回归风险 | 补充 `packages/engine/src/dialogue.test.ts` |
 
 ---
@@ -397,6 +398,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |---|---|---|---|---|
+| 2026-07-11 | v1.5 | 实现 `generate_brief` 消息渲染，check-in 结束后自动发送带 Brief 链接的 follow-up 消息 | AI Agent |
 | 2026-07-11 | v1.4 | 将周期结束提示从 `engine.ts` 迁移到 L5，新增 `CycleContext` 驱动 `end_session` 文案，消除消息突变 | AI Agent |
 | 2026-07-11 | v1.3 | 实现 A/B conversationStyle 规则化应用（v1/v2），`renderMessage` 支持 `style` 参数，新增 style 相关单元测试 | AI Agent |
 | 2026-07-11 | v1.2 | 实现 PlatformCapability 抽象、4 选项自动降级 list、scale 量表渲染、按钮标题超长降级、新增 dialogue 单元测试 | AI Agent |
