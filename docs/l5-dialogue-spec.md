@@ -1,7 +1,7 @@
 # CareMemory L5 对话层（Dialogue Layer）规格文档
 
 > **文档编号**：SPEC-L5-001  
-> **版本**：v1.7  
+> **版本**：v1.8  
 > **分支**：`feat/l5-dialogue-optimization`  
 > **对应架构层**：L5 Dialogue  
 > **上游**：L4 Planner | **下游**：L6 Safety、IM Adapter（WhatsApp）  
@@ -16,7 +16,7 @@ L5 对话层负责把 L4 规划层产生的**结构化决策**（`PlannerOutput`
 核心原则：
 
 1. **与平台解耦**：L5 不知道 WhatsApp、LINE 或 SMS 的具体 payload 格式。
-2. **与 LLM 解耦**：MVP 中 L5 为纯规则渲染；未来可选接入 LLM 润色，但不得改变 `PlannerOutput` 的语义。
+2. **与 LLM 解耦**：默认使用规则渲染；可选接入 LLM 润色，但不得改变 `PlannerOutput` 的语义。
 3. **可追踪**：所有渲染决策必须能通过 `PlannerOutput.nextAction` 反推。
 4. **最小侵入**：L5 不改变患者状态、不直接写数据库，只生成消息对象。
 
@@ -313,9 +313,8 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 | 多选（multi_select）渲染 | ✅ 已实现 | `packages/engine/src/dialogue.ts` |
 | 多语言支持（locale） | ✅ 已实现（en-GB / cy-GB） | `packages/engine/src/dialogue-locales/` |
 | 模板消息生成 | ❌ 未实现 | 当前由 dispatch 层负责 |
-| 多语言支持 | ❌ 未实现 | 规划项 L5-OPT-005 |
+| LLM 润色 | ✅ 已实现 | `packages/engine/src/dialogue-llm-polish.ts` |
 | A/B 对话风格应用 | ✅ 已实现（规则化 v1/v2） | `packages/engine/src/dialogue-styles.ts` |
-| LLM 润色 | ❌ 未实现 | 规划项 L5-OPT-007 |
 
 ---
 
@@ -400,6 +399,7 @@ L5 输出的 `OutboundMessage` 由 `packages/im-whatsapp/src/index.ts` 中的 `W
 
 | 日期 | 版本 | 变更内容 | 作者 |
 |---|---|---|---|---|
+| 2026-07-11 | v1.8 | 实现可选 LLM 润色层，`renderMessage` 支持 `enableLlmPolish` / `llmClient` / `onLlmCall`，新增 `packages/engine/src/dialogue-llm-polish.ts` 与单元测试 | AI Agent |
 | 2026-07-11 | v1.7 | 实现多语言 locale 基础设施，支持 `en-GB` / `cy-GB`，`renderMessage` 新增 `locale` 参数 | AI Agent |
 | 2026-07-11 | v1.6 | 实现 `multi_select` 多选渲染（list / 枚举文本 + "Reply with all that apply"） | AI Agent |
 | 2026-07-11 | v1.5 | 实现 `generate_brief` 消息渲染，check-in 结束后自动发送带 Brief 链接的 follow-up 消息 | AI Agent |
