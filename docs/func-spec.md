@@ -398,7 +398,7 @@ interface OutboundMessage {
     text: string;
     buttons?: Array<{ id: string; title: string }>; // WhatsApp max 3, title ≤20 chars
     list?: Array<{ id: string; title: string; description?: string }>; // max 10
-    templateName?: string;      // 24h 外使用
+    templateKey?: string;      // 24h 外使用，平台无关 key，由 IM adapter 映射为真实模板名
     templateVariables?: Record<string, string>;
   };
 }
