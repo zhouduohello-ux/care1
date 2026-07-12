@@ -7,6 +7,8 @@ import {
   isAnswerToPendingQuestion,
   isAnswerRelevantWithLlm,
   buildRepromptMessage,
+  buildClarificationMessage,
+  looksLikeClarificationRequest,
   classifyNonAnswer,
   getTurnState,
   recordReprompt,
@@ -347,5 +349,59 @@ describe("isAnswerRelevantWithLlm", () => {
     await isAnswerRelevantWithLlm(makeInbound({ text: "yes" }), makePerception(), pending, client, onLlmCall);
     expect(onLlmCall).toHaveBeenCalledTimes(1);
     expect(onLlmCall).toHaveBeenCalledWith("mock-relevance", expect.any(Array), expect.any(String), expect.any(Object));
+  });
+});
+
+describe("looksLikeClarificationRequest", () => {
+  it("returns true for clarification phrases", () => {
+    expect(looksLikeClarificationRequest("What do you mean?")).toBe(true);
+    expect(looksLikeClarificationRequest("I don't understand the question")).toBe(true);
+    expect(looksLikeClarificationRequest("Can you explain that?")).toBe(true);
+    expect(looksLikeClarificationRequest("Could you clarify?")).toBe(true);
+    expect(looksLikeClarificationRequest("Say that again")).toBe(true);
+  });
+
+  it("returns false for normal answers", () => {
+    expect(looksLikeClarificationRequest("none")).toBe(false);
+    expect(looksLikeClarificationRequest("I woke up twice")).toBe(false);
+    expect(looksLikeClarificationRequest("yes")).toBe(false);
+  });
+});
+
+describe("buildClarificationMessage", () => {
+  it("explains the pending question and lists options", async () => {
+    const pending = {
+      topic: "nighttime_symptoms",
+      purpose: "Track nighttime cough or wheeze over the past 2 days.",
+      expectedResponseType: "single_choice" as const,
+      options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildClarificationMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    });
+    expect(message.content.type).toBe("list");
+    expect(message.content.text).toContain("Track nighttime cough or wheeze");
+    const listItems = message.content.list ?? [];
+    const titles = listItems.map((item) => item.title);
+    expect(titles).toContain("None");
+    expect(titles).toContain("Woke me up");
+  });
+
+  it("works for text questions without options", async () => {
+    const pending = {
+      topic: "exception_clarification",
+      purpose: "Can you tell me more about what happened?",
+      expectedResponseType: "text" as const,
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildClarificationMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    });
+    expect(message.content.type).toBe("text");
+    expect(message.content.text).toContain("Can you tell me more");
+    expect(message.content.text).toContain("reply in your own words");
   });
 });

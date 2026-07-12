@@ -267,6 +267,71 @@ export async function recordReprompt(
   });
 }
 
+
+const CLARIFICATION_PATTERNS = [
+  /what do you mean/i,
+  /i don't understand/i,
+  /can you explain/i,
+  /could you clarify/i,
+  /what does that mean/i,
+  /repeat the question/i,
+  /say that again/i,
+  /i'm confused/i,
+  /not sure what you're asking/i,
+];
+
+export function looksLikeClarificationRequest(text: string): boolean {
+  return CLARIFICATION_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function formatOptionsForClarification(pending: PendingQuestion, localeCode?: string): string {
+  const options = pending.options ?? [];
+  if (options.length === 0) return "";
+
+  const locale = localeCode ? getLocale(localeCode) : undefined;
+  const labels = options.map((id) => {
+    if (locale) {
+      return matchOptionSynonym(locale, id, id) ?? id;
+    }
+    return id;
+  });
+  return labels.join(" / ");
+}
+
+export async function buildClarificationMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const locale = getLocale(options.locale);
+  const optionsText = formatOptionsForClarification(pending, options.locale);
+  const purpose = pending.purpose.replace(/\?$/, "").trim();
+
+  let text = `No problem — I'm asking: ${purpose}.`;
+  if (optionsText) {
+    text += ` You can reply with: ${optionsText}.`;
+  } else {
+    text += " Just reply in your own words.";
+  }
+
+  const clarificationOutput: PlannerOutput = {
+    reasoning: "User asked for clarification on the pending question.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: text,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, clarificationOutput, options);
+}
+
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {
   await prisma.checkIn.update({
     where: { id: checkInId },
