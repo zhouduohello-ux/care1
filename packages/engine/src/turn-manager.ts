@@ -113,19 +113,14 @@ export function isAnswerToPendingQuestion(
   }
 
   if (pending.expectedResponseType === "multi_select") {
-    // Split on commas, the word "and", or whitespace.
-    const tokens = text
-      .split(/,|\band\b|\s+/i)
-      .map((t) => t.trim())
-      .filter(Boolean);
-    if (tokens.length === 0) return false;
-
-    return tokens.every((token) =>
-      options.some((optionId) =>
-        token === optionId.toLowerCase() ||
-        (locale ? matchOptionSynonym(locale, optionId, token) : false)
-      )
+    const { matched, hasMeaningfulUnmatched } = extractMultiSelectAnswers(
+      text,
+      options,
+      localeCode
     );
+    // Accept as a full answer if we matched at least one option and nothing
+    // meaningful was left unexplained.
+    return matched.length > 0 && !hasMeaningfulUnmatched;
   }
 
   // Accept free-text replies when perception extracted an observation for the pending topic.
@@ -206,6 +201,276 @@ function repromptPrefix(repromptCount: number): string {
   if (repromptCount <= 1) return "I didn't catch that. ";
   if (repromptCount === 2) return "Just to confirm: ";
   return "Still waiting: ";
+}
+
+const STOP_WORDS = new Set([
+  "i",
+  "i've",
+  "i'd",
+  "im",
+  "i'm",
+  "it",
+  "its",
+  "it's",
+  "its",
+  "the",
+  "a",
+  "an",
+  "and",
+  "or",
+  "but",
+  "so",
+  "to",
+  "of",
+  "in",
+  "on",
+  "at",
+  "for",
+  "with",
+  "about",
+  "as",
+  "by",
+  "from",
+  "had",
+  "have",
+  "has",
+  "was",
+  "were",
+  "is",
+  "are",
+  "be",
+  "been",
+  "being",
+  "my",
+  "your",
+  "mine",
+  "yours",
+  "this",
+  "that",
+  "these",
+  "those",
+  "me",
+  "you",
+  "he",
+  "she",
+  "we",
+  "they",
+  "them",
+  "us",
+  "some",
+  "any",
+  "all",
+  "none",
+  "no",
+  "yes",
+  "just",
+  "only",
+  "mostly",
+  "mainly",
+  "mostly",
+  "probably",
+  "maybe",
+  "perhaps",
+  "like",
+  "kind",
+  "sort",
+  "bit",
+  "little",
+  "lot",
+  "much",
+  "many",
+  "more",
+  "most",
+  "well",
+  "too",
+  "very",
+  "quite",
+  "really",
+  "pretty",
+  "rather",
+  "almost",
+  "also",
+  "still",
+  "even",
+  "both",
+  "either",
+  "neither",
+  "one",
+  "two",
+  "three",
+  "first",
+  "last",
+  "next",
+  "then",
+  "there",
+  "here",
+  "now",
+  "today",
+  "yesterday",
+  "tomorrow",
+  "got",
+  "get",
+  "getting",
+  "had",
+  "been",
+  "done",
+  "made",
+  "make",
+  "making",
+]);
+
+export interface ExtractedAnswers {
+  /** Option IDs that were matched in the user's reply. */
+  matched: string[];
+  /** Raw tokens that did not match any option or synonym. */
+  unmatched: string[];
+  /** True if there are unmatched tokens that are not just stop words/filler. */
+  hasMeaningfulUnmatched: boolean;
+}
+
+/**
+ * Extract matched option IDs from a free-text multi-select reply.
+ *
+ * Tokenizes on commas, "and", "or", and whitespace, then matches each token
+ * against option IDs and locale synonyms. Stop words and filler are ignored.
+ */
+export function extractMultiSelectAnswers(
+  text: string,
+  options: string[],
+  localeCode?: string
+): ExtractedAnswers {
+  const locale = localeCode ? getLocale(localeCode) : undefined;
+  const lowerText = text.toLowerCase();
+
+  // Try whole-phrase synonym matches first (e.g. "chest tightness" before splitting).
+  const matchedSet = new Set<string>();
+  for (const optionId of options) {
+    if (locale && matchOptionSynonym(locale, optionId, lowerText)) {
+      matchedSet.add(optionId);
+    } else if (lowerText.includes(optionId.toLowerCase())) {
+      matchedSet.add(optionId);
+    }
+  }
+
+  // Tokenize for per-token matching.
+  const tokens = text
+    .split(/,|\band\b|\bor\b|\s+/i)
+    .map((t) => t.trim())
+    .filter(Boolean);
+
+  const unmatched: string[] = [];
+
+  for (const rawToken of tokens) {
+    const token = rawToken.toLowerCase();
+    if (STOP_WORDS.has(token) || token.length <= 1) continue;
+
+    let tokenMatched = false;
+    for (const optionId of options) {
+      if (token === optionId.toLowerCase() || (locale && matchOptionSynonym(locale, optionId, token))) {
+        matchedSet.add(optionId);
+        tokenMatched = true;
+        break;
+      }
+    }
+
+    if (!tokenMatched) {
+      unmatched.push(rawToken);
+    }
+  }
+
+  const meaningfulUnmatched = unmatched.filter((t) => {
+    const lower = t.toLowerCase();
+    return !STOP_WORDS.has(lower) && lower.length > 2;
+  });
+
+  return {
+    matched: Array.from(matchedSet),
+    unmatched,
+    hasMeaningfulUnmatched: meaningfulUnmatched.length > 0,
+  };
+}
+
+export interface PartialAnswerResult {
+  /** True if the reply contains at least one valid option but also has unmatched meaningful tokens. */
+  isPartial: boolean;
+  extracted: ExtractedAnswers;
+}
+
+/**
+ * Decide whether a free-text reply to a multi-select pending question is partial.
+ *
+ * A reply is partial when it contains at least one valid option match but also
+ * contains other meaningful words that we could not map to an option. In that
+ * case we accept the matched options and ask the user to clarify the rest.
+ */
+export function detectPartialMultiSelectAnswer(
+  message: InboundMessage,
+  pending: PendingQuestion,
+  localeCode?: string
+): PartialAnswerResult {
+  const extracted = extractMultiSelectAnswers(
+    message.content.text ?? "",
+    pending.options ?? [],
+    localeCode
+  );
+  return {
+    isPartial: extracted.matched.length > 0 && extracted.hasMeaningfulUnmatched,
+    extracted,
+  };
+}
+
+function formatOptionLabels(optionIds: string[], localeCode?: string): string[] {
+  const locale = localeCode ? getLocale(localeCode) : undefined;
+  return optionIds.map((id) => {
+    if (locale) {
+      const label = matchOptionSynonym(locale, id, id);
+      if (label) return id;
+    }
+    return id;
+  });
+}
+
+export async function buildPartialAnswerFollowUpMessage(
+  userId: string,
+  pending: PendingQuestion,
+  matched: string[],
+  unmatched: string[],
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const locale = getLocale(options.locale);
+  const matchedLabels = matched.map((id) => {
+    const labels = locale.optionLabels[pending.topic];
+    const idx = (pending.options ?? []).indexOf(id);
+    if (labels && idx >= 0 && idx < labels.length) return labels[idx];
+    return id;
+  });
+
+  const matchedText = matchedLabels.join(", ");
+  const unmatchedText = unmatched.join(", ");
+
+  let purpose = `Got it — I've recorded ${matchedText}.`;
+  if (unmatchedText) {
+    purpose += ` What did you mean by ${unmatchedText}?`;
+  } else {
+    purpose += " Is there anything else you'd like to add?";
+  }
+
+  const followUpOutput: PlannerOutput = {
+    reasoning: "User gave a partial answer to a multi-select question; following up on unmatched tokens.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose,
+      expectedResponseType: "text",
+      options: undefined,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, followUpOutput, options);
 }
 
 export async function buildRepromptMessage(
