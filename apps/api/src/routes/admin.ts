@@ -117,6 +117,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       llmRejectedLowConfidence24h,
       skips24h,
       goBacks24h,
+      topicShifts24h,
     ] = await Promise.all([
       fastify.prisma.event.count({
         where: {
@@ -151,6 +152,13 @@ export default async function adminRoutes(fastify: FastifyInstance) {
           type: "user_action",
           timestamp: { gte: oneDayAgo },
           payload: { path: ["action"], equals: "go_back" },
+        },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "user_action",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["action"], equals: "topic_shift" },
         },
       }),
     ]);
@@ -225,6 +233,7 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         llmRejectedLowConfidence24h,
         skips24h,
         goBacks24h,
+        topicShifts24h,
         answerConfidence: {
           avg24h: confidenceCount > 0 ? Math.round((confidenceSum / confidenceCount) * 100) / 100 : 0,
           buckets24h: confidenceBuckets,
