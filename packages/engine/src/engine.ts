@@ -979,6 +979,23 @@ export async function processInbound(
               );
               const { messages, summary } = safetyWrapWithSummary(userId, [previousQuestionMessage]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+
+              await prisma.event.create({
+                data: {
+                  userId: user.id,
+                  cycleId: cycle.id,
+                  checkInId: activeCheckIn.id,
+                  type: "user_action" as const,
+                  payload: {
+                    action: "go_back",
+                    topic: goBack.previousQuestion.topic,
+                    expectedResponseType: goBack.previousQuestion.expectedResponseType,
+                  } as unknown as Prisma.InputJsonValue,
+                  timestamp: context.now,
+                  traceId: perception.traceId,
+                },
+              });
+
               return {
                 messages,
                 trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },

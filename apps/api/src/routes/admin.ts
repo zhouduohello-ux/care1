@@ -78,6 +78,83 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       }),
     ]);
 
+    // Turn Manager detailed analytics: answer confidence and match methods from recent inbound events.
+    const recentInbound = await fastify.prisma.event.findMany({
+      where: { type: "inbound_message", timestamp: { gte: oneDayAgo } },
+      select: { payload: true },
+    });
+
+    const confidenceBuckets = { low: 0, medium: 0, high: 0, unknown: 0 };
+    const matchMethodCounts: Record<string, number> = {};
+    let confidenceSum = 0;
+    let confidenceCount = 0;
+
+    for (const event of recentInbound) {
+      const payload = (event.payload ?? {}) as {
+        turnManager?: { matchConfidence?: number; matchMethod?: string };
+      };
+      const tm = payload.turnManager;
+      if (tm && typeof tm.matchConfidence === "number") {
+        const c = tm.matchConfidence;
+        confidenceSum += c;
+        confidenceCount += 1;
+        if (c < 0.5) confidenceBuckets.low += 1;
+        else if (c < 0.8) confidenceBuckets.medium += 1;
+        else confidenceBuckets.high += 1;
+      } else {
+        confidenceBuckets.unknown += 1;
+      }
+
+      const method = tm?.matchMethod;
+      if (method) {
+        matchMethodCounts[method] = (matchMethodCounts[method] ?? 0) + 1;
+      }
+    }
+
+    const [
+      clarifications24h,
+      partialAnswers24h,
+      llmRejectedLowConfidence24h,
+      skips24h,
+      goBacks24h,
+    ] = await Promise.all([
+      fastify.prisma.event.count({
+        where: {
+          type: "turn_reprompt",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["action"], equals: "clarification" },
+        },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "turn_reprompt",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["action"], equals: "partial_answer_follow_up" },
+        },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "turn_reprompt",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["action"], equals: "llm_rejected_low_confidence" },
+        },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "user_action",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["action"], equals: "skip_question" },
+        },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "user_action",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["action"], equals: "go_back" },
+        },
+      }),
+    ]);
+
     const llmCalls = await fastify.prisma.event.findMany({
       where: { type: "llm_call" },
       select: { tokenUsage: true },
@@ -143,6 +220,16 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         noAnswers24h,
         timeouts24h,
         nudges24h,
+        clarifications24h,
+        partialAnswers24h,
+        llmRejectedLowConfidence24h,
+        skips24h,
+        goBacks24h,
+        answerConfidence: {
+          avg24h: confidenceCount > 0 ? Math.round((confidenceSum / confidenceCount) * 100) / 100 : 0,
+          buckets24h: confidenceBuckets,
+          matchMethodCounts24h: matchMethodCounts,
+        },
       },
       llmTokens: tokenTotals,
       experimentAssignments,

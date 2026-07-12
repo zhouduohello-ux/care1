@@ -52,8 +52,24 @@ function makePrismaStub() {
     event: {
       count: vi.fn(async (args?: { where?: Record<string, unknown> }) => {
         if (args?.where?.type === "llm_call") return 7;
-        if (args?.where?.type === "turn_reprompt") return 5;
+        if (args?.where?.type === "turn_reprompt") {
+          const payload = args.where.payload as { path?: string[]; equals?: string } | undefined;
+          if (payload?.path?.[0] === "action") {
+            if (payload.equals === "clarification") return 3;
+            if (payload.equals === "partial_answer_follow_up") return 2;
+            if (payload.equals === "llm_rejected_low_confidence") return 1;
+          }
+          return 5;
+        }
         if (args?.where?.type === "state_updated") return 2;
+        if (args?.where?.type === "user_action") {
+          const payload = args.where.payload as { path?: string[]; equals?: string } | undefined;
+          if (payload?.path?.[0] === "action") {
+            if (payload.equals === "skip_question") return 4;
+            if (payload.equals === "go_back") return 2;
+          }
+          return 6;
+        }
         return 200;
       }),
       findMany: vi.fn(async (args?: { where?: Record<string, unknown>; select?: Record<string, unknown> }) => {
@@ -61,6 +77,14 @@ function makePrismaStub() {
           return [
             { tokenUsage: { prompt: 100, completion: 50, total: 150 } },
             { tokenUsage: { prompt: 200, completion: 100, total: 300 } },
+          ];
+        }
+        if (args?.where?.type === "inbound_message") {
+          return [
+            { payload: { turnManager: { matchConfidence: 0.95, matchMethod: "exact_option" } } },
+            { payload: { turnManager: { matchConfidence: 0.6, matchMethod: "text" } } },
+            { payload: { turnManager: { matchConfidence: 0.85, matchMethod: "synonym" } } },
+            { payload: {} },
           ];
         }
         return [
@@ -150,6 +174,16 @@ describe("admin routes", () => {
       noAnswers24h: 4,
       timeouts24h: 2,
       nudges24h: 1,
+      clarifications24h: 3,
+      partialAnswers24h: 2,
+      llmRejectedLowConfidence24h: 1,
+      skips24h: 4,
+      goBacks24h: 2,
+      answerConfidence: {
+        avg24h: 0.8,
+        buckets24h: { low: 0, medium: 1, high: 2, unknown: 1 },
+        matchMethodCounts24h: { exact_option: 1, text: 1, synonym: 1 },
+      },
     });
   });
 
