@@ -141,9 +141,9 @@ export async function processExpiredPendingQuestions(
 export async function processPendingNudges(
   prisma: PrismaClient,
   clock: Clock,
-  opts: { nudgeAfterMs?: number } = {}
+  opts: { nudgeAfterMs?: number; now?: Date } = {}
 ): Promise<OutboundMessage[]> {
-  const now = clock.now();
+  const now = opts.now ?? clock.now();
   const nudgeAfterMs = opts.nudgeAfterMs ?? getNudgeAfterMs();
   const deadline = new Date(now.getTime() - nudgeAfterMs);
 
