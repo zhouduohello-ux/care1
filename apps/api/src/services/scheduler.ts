@@ -21,6 +21,11 @@ function parseMsEnv(name: string, fallback: number): number {
 
 export const DEFAULT_NUDGE_AFTER_MS = 12 * 60 * 60 * 1000;
 export const DEFAULT_PENDING_TIMEOUT_MS = 24 * 60 * 60 * 1000;
+export const DEFAULT_SCAN_LOOKBACK_MS = 7 * 24 * 60 * 60 * 1000;
+
+export function getScanLookbackMs(): number {
+  return parseMsEnv("SCHEDULER_SCAN_LOOKBACK_MS", DEFAULT_SCAN_LOOKBACK_MS);
+}
 
 export function getNudgeAfterMs(): number {
   return parseMsEnv("PENDING_QUESTION_NUDGE_AFTER_MS", DEFAULT_NUDGE_AFTER_MS);
@@ -50,10 +55,11 @@ export async function processDueCheckIns(
   quotaStore?: QuotaStore
 ) {
   const now = clock.now();
+  const lookback = new Date(now.getTime() - getScanLookbackMs());
   const dueCycles = await prisma.cycle.findMany({
     where: {
       status: "ACTIVE",
-      nextCheckinAt: { lte: now },
+      nextCheckinAt: { lte: now, gte: lookback },
     },
     include: { user: true },
   });
@@ -80,15 +86,17 @@ export async function processDueCheckIns(
 export async function processExpiredPendingQuestions(
   prisma: PrismaClient,
   now: Date,
-  opts: { timeoutMs?: number } = {}
+  opts: { timeoutMs?: number; lookbackMs?: number } = {}
 ) {
   const timeoutMs = opts.timeoutMs ?? getPendingTimeoutMs();
+  const lookbackMs = opts.lookbackMs ?? getScanLookbackMs();
   const deadline = new Date(now.getTime() - timeoutMs);
+  const minSentAt = new Date(deadline.getTime() - lookbackMs);
 
   const expired = await prisma.checkIn.findMany({
     where: {
       status: "SENT",
-      sentAt: { lte: deadline },
+      sentAt: { lte: deadline, gte: minSentAt },
       pendingQuestion: { not: Prisma.JsonNull },
     },
     include: { cycle: { include: { user: true } } },
@@ -141,16 +149,18 @@ export async function processExpiredPendingQuestions(
 export async function processPendingNudges(
   prisma: PrismaClient,
   clock: Clock,
-  opts: { nudgeAfterMs?: number; now?: Date } = {}
+  opts: { nudgeAfterMs?: number; now?: Date; lookbackMs?: number } = {}
 ): Promise<OutboundMessage[]> {
   const now = opts.now ?? clock.now();
   const nudgeAfterMs = opts.nudgeAfterMs ?? getNudgeAfterMs();
+  const lookbackMs = opts.lookbackMs ?? getScanLookbackMs();
   const deadline = new Date(now.getTime() - nudgeAfterMs);
+  const minSentAt = new Date(deadline.getTime() - lookbackMs);
 
   const nudgable = await prisma.checkIn.findMany({
     where: {
       status: "SENT",
-      sentAt: { lte: deadline },
+      sentAt: { lte: deadline, gte: minSentAt },
       nudgeSentAt: null,
       pendingQuestion: { not: Prisma.JsonNull },
     },
@@ -194,14 +204,16 @@ export async function processPendingNudges(
   return sent;
 }
 
-export async function processDueReminders(prisma: PrismaClient, clock: Clock) {
+export async function processDueReminders(prisma: PrismaClient, clock: Clock, opts: { lookbackMs?: number } = {}) {
   const now = clock.now();
   const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  const lookbackMs = opts.lookbackMs ?? getScanLookbackMs();
+  const minSentAt = new Date(oneDayAgo.getTime() - lookbackMs);
 
   const pendingCheckIns = await prisma.checkIn.findMany({
     where: {
       status: "SENT",
-      sentAt: { lte: oneDayAgo },
+      sentAt: { lte: oneDayAgo, gte: minSentAt },
       reminderSentAt: null,
     },
     include: { cycle: { include: { user: true } } },
@@ -258,6 +270,10 @@ function getBullmqConnection(redis: Redis) {
   };
 }
 
+export function getSchedulerIntervalMs(): number {
+  return parseMsEnv("SCHEDULER_INTERVAL_MS", 60_000);
+}
+
 export async function startScheduler(
   prisma: PrismaClient,
   clock: Clock,
@@ -265,7 +281,7 @@ export async function startScheduler(
   quotaStore?: QuotaStore,
   opts: { intervalMs?: number } = {}
 ): Promise<Scheduler> {
-  const intervalMs = opts.intervalMs ?? 60_000;
+  const intervalMs = opts.intervalMs ?? getSchedulerIntervalMs();
   const connection = getBullmqConnection(redis);
   const queue = new Queue(SCHEDULER_QUEUE_NAME, { connection });
   const processor = createProcessor({ prisma, clock, quotaStore });

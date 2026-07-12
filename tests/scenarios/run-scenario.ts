@@ -63,6 +63,10 @@ export interface StepResult {
 export interface RunOptions {
   apiBaseUrl?: string;
   verbose?: boolean;
+  stepDelayMs?: number;
+  scenarioDelayMs?: number;
+  requestTimeoutMs?: number;
+  requestRetries?: number;
 }
 
 export interface RunResult {
@@ -74,19 +78,41 @@ export interface RunResult {
 }
 
 export const DEFAULT_API_BASE_URL = process.env.API_BASE_URL ?? "http://localhost:3055";
+export const DEFAULT_STEP_DELAY_MS = Number(process.env.E2E_STEP_DELAY_MS ?? "50");
+export const DEFAULT_SCENARIO_DELAY_MS = Number(process.env.E2E_SCENARIO_DELAY_MS ?? "200");
+export const DEFAULT_REQUEST_TIMEOUT_MS = Number(process.env.E2E_REQUEST_TIMEOUT_MS ?? "30000");
+export const DEFAULT_REQUEST_RETRIES = Number(process.env.E2E_REQUEST_RETRIES ?? "2");
 
 export const TEST_TOOL_API_KEY = process.env.TEST_TOOL_API_KEY;
 
 export class ScenarioRunner {
   private apiBaseUrl: string;
   private verbose: boolean;
+  private stepDelayMs: number;
+  private scenarioDelayMs: number;
+  private requestTimeoutMs: number;
+  private requestRetries: number;
 
   constructor(opts: RunOptions = {}) {
     this.apiBaseUrl = opts.apiBaseUrl ?? DEFAULT_API_BASE_URL;
     this.verbose = opts.verbose ?? false;
+    this.stepDelayMs = opts.stepDelayMs ?? DEFAULT_STEP_DELAY_MS;
+    this.scenarioDelayMs = opts.scenarioDelayMs ?? DEFAULT_SCENARIO_DELAY_MS;
+    this.requestTimeoutMs = opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
+    this.requestRetries = opts.requestRetries ?? DEFAULT_REQUEST_RETRIES;
   }
 
-  private async rawApi(route: string, opts: RequestInit = {}) {
+  private async sleep(ms: number) {
+    if (ms > 0) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+  }
+
+  async sleepBetweenScenarios() {
+    await this.sleep(this.scenarioDelayMs);
+  }
+
+  private async rawApi(route: string, opts: RequestInit = {}, retryCount = 0): Promise<Response> {
     const url = `${this.apiBaseUrl}${route}`;
     const headers: Record<string, string> = {
       "Content-Type": "application/json",
@@ -94,18 +120,37 @@ export class ScenarioRunner {
     if (TEST_TOOL_API_KEY && route.startsWith("/dev/test-tool")) {
       headers["X-Test-Tool-Api-Key"] = TEST_TOOL_API_KEY;
     }
-    const response = await fetch(url, {
-      ...opts,
-      headers: {
-        ...headers,
-        ...opts.headers,
-      },
-    });
-    if (!response.ok) {
-      const text = await response.text().catch(() => "");
-      throw new Error(`HTTP ${response.status} from ${route}: ${text}`);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+
+    try {
+      const response = await fetch(url, {
+        ...opts,
+        signal: controller.signal,
+        headers: {
+          ...headers,
+          ...opts.headers,
+        },
+      });
+      if (!response.ok) {
+        const text = await response.text().catch(() => "");
+        throw new Error(`HTTP ${response.status} from ${route}: ${text}`);
+      }
+      return response;
+    } catch (err) {
+      if (retryCount < this.requestRetries) {
+        const delay = Math.min(1000 * 2 ** retryCount, 8000);
+        if (this.verbose) {
+          console.log(`    retry ${route} after ${delay}ms (${err instanceof Error ? err.message : String(err)})`);
+        }
+        await this.sleep(delay);
+        return this.rawApi(route, opts, retryCount + 1);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
-    return response;
   }
 
   private async api(route: string, opts: RequestInit = {}) {
@@ -269,6 +314,8 @@ export class ScenarioRunner {
           failures.push(`Assertion at step ${stepNumber}: ${desc}`);
         }
       }
+
+      await this.sleep(this.stepDelayMs);
     }
 
     console.log("");
