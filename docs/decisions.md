@@ -488,6 +488,21 @@
 
 ---
 
+## D30. RAG Corpus 更新：手动 reindex CLI
+
+**决策**：MVP 阶段医学策略库的更新通过手动 CLI 触发，记录 Corpus 版本号并在 LLM trace 中携带，便于审计与未来 CI/CD 接入。
+
+**边界**：
+- 命令：`pnpm corpus:reindex`；
+- 重新读取 `packages/rag/src/corpus/` 下的 Markdown 文档，分块并生成 `packages/rag/src/corpus.ts`；
+- 当前使用关键词检索（keyword search）作为向量检索的轻量替代；
+- LLM `llm_call` Event 的 payload 中可携带 `ragCorpusVersion`，用于追溯生成 reasoning 时使用的策略库版本；
+- 未来可接入 CI/CD，在策略文档变更时自动重新嵌入并写入向量数据库。
+
+**影响文件**：`packages/rag/src/`、`packages/engine/src/llm.ts`、`docs/tech-spec.md` 第 6.2 节。
+
+---
+
 ## 变更记录
 
 | 版本 | 日期 | 变更内容 |
@@ -497,3 +512,4 @@
 | 0.3  | 2026-06-15 | 追加 D21 出站消息幂等性统一 |
 | 0.4  | 2026-06-16 | 追加 D22 跨 cycle 迟到回答 |
 | 0.5  | 2026-07-11 | 追加 D23–D29：4 周周期延续、Turn Manager、pending question 超时/nudge/审计、WhatsApp 模板清单、访问令牌、GDPR/admin、可观测性 |
+| 0.6  | 2026-07-11 | 追加 D30：RAG Corpus reindex CLI |
