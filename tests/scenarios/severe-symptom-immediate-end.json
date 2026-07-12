@@ -1,0 +1,38 @@
+{
+  "id": "severe_symptom_immediate_end",
+  "name": "Severe symptom ends check-in immediately",
+  "description": "When a user reports severe breathing difficulty during an active check-in, the system sends urgent safety guidance, ends the check-in as EXCEPTION, and generates a Disease Card.",
+  "user": {
+    "phoneNumber": "test_severe_symptom"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "send", "text": "I can't breathe and my chest is tight" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "999",
+      "description": "Severe symptom triggers urgent 999 guidance"
+    },
+    {
+      "afterStep": 5,
+      "type": "planner",
+      "path": "nextAction.topic",
+      "op": "eq",
+      "value": "system",
+      "description": "Fast-path planner output is system-handled safety response"
+    },
+    {
+      "afterStep": 5,
+      "type": "diseaseCard",
+      "op": "exists",
+      "description": "A Disease Card is generated after the emergency-ended check-in"
+    }
+  ]
+}
