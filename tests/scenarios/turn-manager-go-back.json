@@ -1,0 +1,34 @@
+{
+  "id": "turn_manager_go_back",
+  "name": "Turn Manager goes back to previous question",
+  "description": "When the user asks to go back, the system re-asks the previous check-in question from history.",
+  "user": {
+    "phoneNumber": "test_turn_go_back"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "send", "text": "go back" },
+    { "action": "reply", "buttonId": "night_none" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "Going back",
+      "caseInsensitive": true,
+      "description": "System indicates it is going back to the previous question"
+    },
+    {
+      "afterStep": 6,
+      "type": "planner",
+      "path": "nextAction.topic",
+      "op": "eq",
+      "value": "reliever_use",
+      "description": "After re-answering, the system moves forward again"
+    }
+  ]
+}

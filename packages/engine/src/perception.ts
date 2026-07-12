@@ -64,6 +64,11 @@ export async function perceive(
     result.extractedObservations.push(makeObservation("system_intent", upperText.toLowerCase().replace(/ /g, "_"), {}));
     return result;
   }
+  if (/^go back$/i.test(text) || /previous question/i.test(text) || /last question/i.test(text)) {
+    result.intent = { primary: "question", confidence: 1.0 };
+    result.extractedObservations.push(makeObservation("system_intent", "go_back", { command: text }));
+    return result;
+  }
   if (upperText === "HELP") {
     result.intent = { primary: "help", confidence: 1.0 };
     result.extractedObservations.push(makeObservation("system_intent", "help", {}));

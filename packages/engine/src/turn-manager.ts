@@ -17,6 +17,7 @@ export interface PendingQuestion {
 export interface TurnState {
   pendingQuestion?: PendingQuestion;
   repromptCount: number;
+  questionHistory: PendingQuestion[];
 }
 
 /** Default maximum number of reprompts before the system gives up and moves on. */
@@ -57,11 +58,12 @@ export function pendingQuestionFromPlannerOutput(output: PlannerOutput): Pending
 export async function getTurnState(prisma: PrismaClient, checkInId: string): Promise<TurnState> {
   const checkIn = await prisma.checkIn.findUnique({
     where: { id: checkInId },
-    select: { pendingQuestion: true, repromptCount: true },
+    select: { pendingQuestion: true, repromptCount: true, questionHistory: true },
   });
   return {
     pendingQuestion: (checkIn?.pendingQuestion as PendingQuestion | undefined) ?? undefined,
     repromptCount: checkIn?.repromptCount ?? 0,
+    questionHistory: (checkIn?.questionHistory as PendingQuestion[] | undefined) ?? [],
   };
 }
 
@@ -393,6 +395,76 @@ export async function recordSkippedQuestion(
   });
 }
 
+const GO_BACK_PATTERNS = [
+  /^go back$/i,
+  /previous question/i,
+  /last question/i,
+  /^back$/i,
+  /go to the previous/i,
+  /i want to change my answer/i,
+  /change my answer/i,
+];
+
+export function looksLikeGoBackRequest(text: string): boolean {
+  return GO_BACK_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export interface GoBackResult {
+  previousQuestion?: PendingQuestion;
+  hasHistory: boolean;
+}
+
+export async function goBackToPreviousQuestion(
+  prisma: PrismaClient,
+  checkInId: string
+): Promise<GoBackResult> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { questionHistory: true },
+  });
+  const history = (current?.questionHistory as PendingQuestion[] | undefined) ?? [];
+  if (history.length === 0) {
+    return { hasHistory: false };
+  }
+
+  const previousQuestion = history[history.length - 1];
+  const newHistory = history.slice(0, -1);
+
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      pendingQuestion: previousQuestion as unknown as Prisma.InputJsonValue,
+      repromptCount: 0,
+      questionHistory: newHistory as unknown as Prisma.InputJsonValue,
+    },
+  });
+
+  return { previousQuestion, hasHistory: true };
+}
+
+export async function buildPreviousQuestionMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const previousOutput: PlannerOutput = {
+    reasoning: "User asked to go back to the previous question.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: `Going back: ${pending.purpose}`,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, previousOutput, options);
+}
+
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {
   await prisma.checkIn.update({
     where: { id: checkInId },
@@ -408,11 +480,22 @@ export async function setPendingQuestion(
   checkInId: string,
   pending: PendingQuestion
 ): Promise<void> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { pendingQuestion: true, questionHistory: true },
+  });
+  const history = (current?.questionHistory as PendingQuestion[] | undefined) ?? [];
+  const currentPending = current?.pendingQuestion as PendingQuestion | undefined;
+
   await prisma.checkIn.update({
     where: { id: checkInId },
     data: {
       pendingQuestion: pending as unknown as Prisma.InputJsonValue,
       repromptCount: 0,
+      questionHistory: [
+        ...history,
+        ...(currentPending ? [currentPending] : []),
+      ] as unknown as Prisma.InputJsonValue,
     },
   });
 }
