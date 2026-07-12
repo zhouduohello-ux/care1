@@ -61,6 +61,10 @@ export function layerProvider(layer: LlmModelType): "chat" | "reason" {
  *
  *   LLM_FALLBACK_MODEL      — fallback model when primary fails (both providers)
  *
+ *   LLM_TIMEOUT_MS          — request timeout in milliseconds (default 30000)
+ *   LLM_MAX_RETRIES         — max retries for the primary model (default 2)
+ *   LLM_RETRY_BASE_DELAY_MS — base delay for exponential backoff (default 500)
+ *
  *   LLM_MODEL_<LAYER>       — per-layer model override (PERCEPTION, PLANNER, …)
  *   LLM_TEMPERATURE         — global default temperature (default 0.3)
  *   LLM_TEMPERATURE_<LAYER> — per-layer temperature override
@@ -72,6 +76,12 @@ export interface LLMConfig {
   reason: LLMProviderConfig;
   /** Per-layer model (optional) and temperature settings. */
   layers: Record<LlmModelType, LLMLayerConfig>;
+  /** Request timeout in milliseconds. */
+  timeoutMs: number;
+  /** Maximum retry attempts for the primary model. */
+  maxRetries: number;
+  /** Base delay for exponential backoff in milliseconds. */
+  retryBaseDelayMs: number;
 }
 
 /**
@@ -125,7 +135,15 @@ export function loadLLMConfig(): LLMConfig {
   // Enabled if at least one provider has an API key
   const enabled = !!(chat.apiKey || reason.apiKey);
 
-  return { enabled, chat, reason, layers };
+  return {
+    enabled,
+    chat,
+    reason,
+    layers,
+    timeoutMs: parseIntEnv("LLM_TIMEOUT_MS", 30000),
+    maxRetries: parseIntEnv("LLM_MAX_RETRIES", 2),
+    retryBaseDelayMs: parseIntEnv("LLM_RETRY_BASE_DELAY_MS", 500),
+  };
 }
 
 // ── Client factory ─────────────────────────────────────────────────────
@@ -136,6 +154,26 @@ export interface OpenAIConfig {
   model: string;
   fallbackModel?: string;
   temperature?: number;
+  /** Request timeout in milliseconds. */
+  timeoutMs?: number;
+  /** Maximum retry attempts for the primary model. */
+  maxRetries?: number;
+  /** Base delay for exponential backoff in milliseconds. */
+  retryBaseDelayMs?: number;
+}
+
+export class LlmTimeoutError extends Error {
+  constructor(message = "LLM request timed out") {
+    super(message);
+    this.name = "LlmTimeoutError";
+  }
+}
+
+export class LlmRateLimitError extends Error {
+  constructor(message = "LLM rate limit exceeded") {
+    super(message);
+    this.name = "LlmRateLimitError";
+  }
 }
 
 export function createOpenAIClient(config: OpenAIConfig): LLMClient {
@@ -143,55 +181,95 @@ export function createOpenAIClient(config: OpenAIConfig): LLMClient {
   const model = config.model;
   const fallbackModel = config.fallbackModel;
   const temperature = config.temperature ?? 0.3;
+  const timeoutMs = config.timeoutMs ?? parseIntEnv("LLM_TIMEOUT_MS", 30000);
+  const maxRetries = config.maxRetries ?? parseIntEnv("LLM_MAX_RETRIES", 2);
+  const retryBaseDelayMs = config.retryBaseDelayMs ?? parseIntEnv("LLM_RETRY_BASE_DELAY_MS", 500);
 
   async function callModel(
     messages: LLMMessage[],
     options?: { temperature?: number; responseFormat?: "json" },
     targetModel?: string
   ): Promise<{ content: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
-    const response = await fetch(`${baseUrl}/chat/completions`, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${config.apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: targetModel ?? model,
-        messages,
-        temperature: options?.temperature ?? temperature,
-        response_format: options?.responseFormat === "json" ? { type: "json_object" } : undefined,
-      }),
-    });
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-    if (!response.ok) {
-      const text = await response.text();
-      throw new Error(`OpenAI API ${response.status}: ${text}`);
-    }
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          model: targetModel ?? model,
+          messages,
+          temperature: options?.temperature ?? temperature,
+          response_format: options?.responseFormat === "json" ? { type: "json_object" } : undefined,
+        }),
+        signal: controller.signal,
+      });
 
-    const data = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-    };
-    const msg = data.choices?.[0]?.message;
-    const content = msg?.content || msg?.reasoning_content || "";
-    const usage = data.usage
-      ? {
-          promptTokens: data.usage.prompt_tokens ?? 0,
-          completionTokens: data.usage.completion_tokens ?? 0,
-          totalTokens: data.usage.total_tokens ?? 0,
+      if (!response.ok) {
+        const text = await response.text();
+        if (response.status === 429) {
+          throw new LlmRateLimitError(`OpenAI API 429: ${text}`);
         }
-      : undefined;
-    return { content, usage };
+        throw new Error(`OpenAI API ${response.status}: ${text}`);
+      }
+
+      const data = (await response.json()) as {
+        choices?: Array<{ message?: { content?: string; reasoning_content?: string } }>;
+        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      };
+      const msg = data.choices?.[0]?.message;
+      const content = msg?.content || msg?.reasoning_content || "";
+      const usage = data.usage
+        ? {
+            promptTokens: data.usage.prompt_tokens ?? 0,
+            completionTokens: data.usage.completion_tokens ?? 0,
+            totalTokens: data.usage.total_tokens ?? 0,
+          }
+        : undefined;
+      return { content, usage };
+    } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new LlmTimeoutError(`LLM request timed out after ${timeoutMs}ms`);
+      }
+      throw err;
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  async function callWithRetry(
+    messages: LLMMessage[],
+    options?: { temperature?: number; responseFormat?: "json" },
+    targetModel?: string
+  ): Promise<{ content: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      try {
+        return await callModel(messages, options, targetModel);
+      } catch (err) {
+        lastError = err;
+        if (attempt === maxRetries || !isRetryableLlmError(err)) {
+          throw err;
+        }
+        const delay = retryBaseDelayMs * 2 ** attempt;
+        await sleep(delay);
+      }
+    }
+    throw lastError;
   }
 
   return {
     modelName: model,
     async complete(messages, options) {
       try {
-        return await callModel(messages, options);
+        return await callWithRetry(messages, options);
       } catch (err) {
         if (fallbackModel && isRetryableLlmError(err)) {
-          return await callModel(messages, options, fallbackModel);
+          return await callWithRetry(messages, options, fallbackModel);
         }
         throw err;
       }
@@ -199,17 +277,38 @@ export function createOpenAIClient(config: OpenAIConfig): LLMClient {
   };
 }
 
+function parseIntEnv(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed) || parsed < 0 || !Number.isInteger(parsed)) {
+    console.warn(`[llm] Invalid ${name}="${raw}"; using fallback ${fallback}`);
+    return fallback;
+  }
+  return parsed;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function isRetryableLlmError(error: unknown): boolean {
+  if (error instanceof LlmTimeoutError || error instanceof LlmRateLimitError) return true;
   if (!(error instanceof Error)) return false;
   const message = error.message.toLowerCase();
   return (
     message.includes("rate limit") ||
     message.includes("429") ||
     message.includes("timeout") ||
+    message.includes("timed out") ||
     message.includes("500") ||
     message.includes("503") ||
     message.includes("502") ||
-    message.includes("fetch failed")
+    message.includes("fetch failed") ||
+    message.includes("econnreset") ||
+    message.includes("econnrefused") ||
+    message.includes("socket hang up") ||
+    message.includes("networkerror")
   );
 }
 

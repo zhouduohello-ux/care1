@@ -7,7 +7,7 @@ import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs,
 vi.mock("@carememory/engine", () => ({
   handleCheckInTrigger: vi.fn(async () => []),
   scheduleNextCheckInOffset: vi.fn((_userId: string, now: Date) => new Date(now.getTime() + 24 * 60 * 60 * 1000)),
-  loadLLMConfig: vi.fn(() => ({ enabled: false, chat: { apiKey: "", baseUrl: "", model: "" }, reason: { apiKey: "", baseUrl: "", model: "" }, layers: {} })),
+  loadLLMConfig: vi.fn(() => ({ enabled: false, chat: { apiKey: "", baseUrl: "", model: "" }, reason: { apiKey: "", baseUrl: "", model: "" }, layers: {}, timeoutMs: 30000, maxRetries: 2, retryBaseDelayMs: 500 })),
 }));
 
 vi.mock("../lib/dispatch-outbound.js", () => ({

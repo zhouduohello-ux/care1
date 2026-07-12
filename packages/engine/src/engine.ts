@@ -80,7 +80,7 @@ function resolveLlmClient(context: EngineContext, model: LlmModelType): LLMClien
   const effectiveModel = layerConfig.model || providerConfig.model;
   if (!effectiveModel) return undefined;
 
-  const cacheKey = `${model}:${provider}:${effectiveModel}:${layerConfig.temperature}`;
+  const cacheKey = `${model}:${provider}:${effectiveModel}:${layerConfig.temperature}:${cfg.timeoutMs}:${cfg.maxRetries}:${cfg.retryBaseDelayMs}`;
 
   let client = llmClientCache.get(cacheKey);
   if (!client) {
@@ -90,6 +90,9 @@ function resolveLlmClient(context: EngineContext, model: LlmModelType): LLMClien
       model: effectiveModel,
       fallbackModel: providerConfig.fallbackModel,
       temperature: layerConfig.temperature,
+      timeoutMs: cfg.timeoutMs,
+      maxRetries: cfg.maxRetries,
+      retryBaseDelayMs: cfg.retryBaseDelayMs,
     });
     llmClientCache.set(cacheKey, client);
   }
