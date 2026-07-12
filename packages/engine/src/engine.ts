@@ -829,6 +829,7 @@ export async function processInbound(
   }
 
   // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
+  let preOutboundMessages: OutboundMessage[] = [];
   if (activeCheckIn) {
     const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
     if (pending && !isAnswerToPendingQuestion(message, perception, pending, user.locale)) {
@@ -870,21 +871,85 @@ export async function processInbound(
           };
 
           // Clarification request: explain the question in simpler terms without
-          // counting it as a failed reprompt attempt.
+          // counting it as a failed reprompt attempt. Track repeated clarifications
+          // so the system can rephrase, offer skip, and eventually move on.
           if (looksLikeClarificationRequest(perception.rawText)) {
-            const clarification = await buildClarificationMessage(userId, pending, renderOptions);
-            const { messages, summary } = safetyWrapWithSummary(userId, [clarification]);
-            await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
-            return {
-              messages,
-              trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-            };
-          }
+            const clarificationCount = pending.clarificationCount ?? 0;
 
-          // Skip request: the user explicitly wants to skip this question.
-          // Record a no_answer observation, clear the pending question, and let
-          // the planner move on to the next topic.
-          if (looksLikeSkipRequest(perception.rawText)) {
+            if (clarificationCount >= 2) {
+              // Too many clarifications: record no_answer, clear pending, and fall
+              // through to L4 Planner so the check-in isn't stuck.
+              await saveObservations(
+                prisma,
+                user.id,
+                cycle.id,
+                inboundEventId,
+                [
+                  {
+                    category: "subjective" as const,
+                    concept: pending.topic,
+                    value: "no_answer" as Prisma.InputJsonValue,
+                    confidence: 1,
+                    extractedBy: "rule" as const,
+                  },
+                ],
+                context.now
+              );
+              await clearPendingQuestion(prisma, activeCheckIn.id);
+
+              const moveOnMessage: OutboundMessage = {
+                userId,
+                conversationContext: { requiresSession: true, priority: "normal" },
+                content: {
+                  type: "text" as const,
+                  text: "No problem — I'll move on to the next question. You can always come back to this later.",
+                },
+              };
+              const { messages, summary } = safetyWrapWithSummary(userId, [moveOnMessage]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              preOutboundMessages = messages;
+              // Fall through to L4 Planner to ask the next question.
+            } else {
+              const clarification = await buildClarificationMessage(userId, pending, renderOptions, clarificationCount);
+
+              const updatedPending: PendingQuestion = {
+                ...pending,
+                clarificationCount: clarificationCount + 1,
+              };
+              await prisma.checkIn.update({
+                where: { id: activeCheckIn.id },
+                data: {
+                  pendingQuestion: updatedPending as unknown as Prisma.InputJsonValue,
+                },
+              });
+
+              await prisma.event.create({
+                data: {
+                  userId: user.id,
+                  cycleId: cycle.id,
+                  checkInId: activeCheckIn.id,
+                  type: "turn_reprompt" as const,
+                  payload: {
+                    topic: pending.topic,
+                    action: "clarification",
+                    clarificationCount: clarificationCount + 1,
+                  } as unknown as Prisma.InputJsonValue,
+                  timestamp: context.now,
+                  traceId: perception.traceId,
+                },
+              });
+
+              const { messages, summary } = safetyWrapWithSummary(userId, [clarification]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              return {
+                messages,
+                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+              };
+            }
+          } else if (looksLikeSkipRequest(perception.rawText)) {
+            // Skip request: the user explicitly wants to skip this question.
+            // Record a no_answer observation, clear the pending question, and let
+            // the planner move on to the next topic.
             await recordSkippedQuestion(
               prisma,
               user.id,
@@ -1140,6 +1205,10 @@ export async function processInbound(
     inboundEventId,
     perception.traceId
   );
+
+  // Prepend any messages that were already sent from Turn Manager before
+  // falling through to L4 Planner (e.g. multi-turn clarification move-on).
+  messages.unshift(...preOutboundMessages);
 
   // Persist the pending question (or clear it) on the active check-in for TurnManager.
   if (activeCheckIn) {

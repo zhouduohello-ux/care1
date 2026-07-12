@@ -2,7 +2,7 @@ import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { Prisma, type PrismaClient, type ObservationCategory } from "@carememory/db";
 import type { PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
-import { matchOptionSynonym, matchScaleWord, getLocale } from "./dialogue-locales/index.js";
+import { matchOptionSynonym, matchScaleWord, getLocale, type DialogueLocale } from "./dialogue-locales/index.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
 import type { LlmAuditCallback } from "./perception.js";
 
@@ -12,6 +12,8 @@ export interface PendingQuestion {
   expectedResponseType: "single_choice" | "scale" | "multi_select" | "text";
   options?: string[];
   askedAt: string;
+  /** Number of clarification messages already sent for this pending question. */
+  clarificationCount?: number;
 }
 
 export interface TurnState {
@@ -537,7 +539,7 @@ export async function recordReprompt(
 
 const CLARIFICATION_PATTERNS = [
   /what do you mean/i,
-  /i don't understand/i,
+  /i.*don't understand/i,
   /can you explain/i,
   /could you clarify/i,
   /what does that mean/i,
@@ -568,17 +570,30 @@ function formatOptionsForClarification(pending: PendingQuestion, localeCode?: st
 export async function buildClarificationMessage(
   userId: string,
   pending: PendingQuestion,
-  options: RenderOptions
+  options: RenderOptions,
+  clarificationCount = 0
 ): Promise<OutboundMessage> {
   const locale = getLocale(options.locale);
   const optionsText = formatOptionsForClarification(pending, options.locale);
   const purpose = pending.purpose.replace(/\?$/, "").trim();
 
-  let text = `No problem — I'm asking: ${purpose}.`;
-  if (optionsText) {
-    text += ` You can reply with: ${optionsText}.`;
+  let text: string;
+  if (clarificationCount === 0) {
+    text = `No problem — I'm asking: ${purpose}.`;
+    if (optionsText) {
+      text += ` You can reply with: ${optionsText}.`;
+    } else {
+      text += " Just reply in your own words.";
+    }
+  } else if (clarificationCount === 1) {
+    text = `Let me rephrase: ${purpose}.`;
+    const example = buildExampleAnswer(pending, locale);
+    if (example) {
+      text += ` For example: ${example}.`;
+    }
+    text += " Reply SKIP if you'd rather move on.";
   } else {
-    text += " Just reply in your own words.";
+    text = `I'm having trouble understanding. Reply SKIP to move on, or tell me in your own words and I'll record it.`;
   }
 
   const clarificationOutput: PlannerOutput = {
@@ -597,6 +612,26 @@ export async function buildClarificationMessage(
   };
 
   return renderMessage(userId, clarificationOutput, options);
+}
+
+function buildExampleAnswer(pending: PendingQuestion, locale: DialogueLocale): string | undefined {
+  if (pending.expectedResponseType === "scale") {
+    return '"3" or "moderate"';
+  }
+  if (pending.expectedResponseType === "single_choice" && pending.options && pending.options.length > 0) {
+    const firstOption = pending.options[0];
+    const labels = locale.optionLabels[pending.topic];
+    const idx = pending.options.indexOf(firstOption);
+    const label = labels?.[idx] ?? firstOption;
+    return `"${label}"`;
+  }
+  if (pending.expectedResponseType === "multi_select" && pending.options && pending.options.length > 0) {
+    const firstTwo = pending.options.slice(0, 2);
+    const labels = locale.optionLabels[pending.topic];
+    const exampleLabels = firstTwo.map((id, idx) => labels?.[idx] ?? id);
+    return `"${exampleLabels.join(" and ")}"`;
+  }
+  return undefined;
 }
 
 const SKIP_PATTERNS = [

@@ -1,0 +1,59 @@
+{
+  "id": "turn_manager_multi_turn_clarification",
+  "name": "Turn Manager multi-turn clarification follow-up",
+  "description": "When the user repeatedly asks for clarification, the system rephrases, offers skip, and eventually records no_answer and moves on.",
+  "user": {
+    "phoneNumber": "test_turn_multi_clarification"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "send", "text": "What do you mean?" },
+    { "action": "send", "text": "I still don't understand" },
+    { "action": "send", "text": "Can you explain?" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "No problem",
+      "caseInsensitive": true,
+      "description": "First clarification explains the question"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "Let me rephrase",
+      "caseInsensitive": true,
+      "description": "Second clarification rephrases the question"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "SKIP",
+      "caseInsensitive": true,
+      "description": "Second clarification offers skip"
+    },
+    {
+      "afterStep": 7,
+      "type": "message",
+      "op": "contains",
+      "value": "move on",
+      "caseInsensitive": true,
+      "description": "Third clarification moves on"
+    },
+    {
+      "afterStep": 7,
+      "type": "planner",
+      "path": "nextAction.topic",
+      "op": "eq",
+      "value": "activity_limitation",
+      "description": "After giving up, planner skips reliever_use and asks activity_limitation"
+    }
+  ]
+}
