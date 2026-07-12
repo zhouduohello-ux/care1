@@ -3,11 +3,14 @@ import type { PrismaClient } from "@carememory/db";
 import type { Job } from "bullmq";
 import type { Redis } from "ioredis";
 import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs, getPendingTimeoutMs } from "./scheduler.js";
+import { deferPendingQuestion } from "@carememory/engine";
 
 vi.mock("@carememory/engine", () => ({
   handleCheckInTrigger: vi.fn(async () => []),
   scheduleNextCheckInOffset: vi.fn((_userId: string, now: Date) => new Date(now.getTime() + 24 * 60 * 60 * 1000)),
   loadLLMConfig: vi.fn(() => ({ enabled: false, chat: { apiKey: "", baseUrl: "", model: "" }, reason: { apiKey: "", baseUrl: "", model: "" }, layers: {}, timeoutMs: 30000, maxRetries: 2, retryBaseDelayMs: 500 })),
+  shouldDeferOnTimeout: vi.fn(() => true),
+  deferPendingQuestion: vi.fn(async (_prisma, _checkInId, pending) => [pending]),
 }));
 
 vi.mock("../lib/dispatch-outbound.js", () => ({
@@ -81,6 +84,7 @@ function makePrismaStub() {
     },
     checkIn: {
       findFirst: vi.fn(async () => null),
+      findUnique: vi.fn(async ({ where }: { where: { id: string } }) => checkIns.find((c) => c.id === where.id) ?? null),
       findMany: vi.fn(async () => checkIns),
       update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => ({ ...checkIns[0], ...data })),
     },
@@ -196,13 +200,14 @@ describe("scheduler", () => {
       );
     });
 
-    it("processes scan-expired-pending by marking stale pending questions as no_answer", async () => {
+    it("processes scan-expired-pending by deferring stale pending questions to the next check-in", async () => {
       const prisma = makePrismaStub();
       prisma._checkIns.push({
         id: "ci_1",
         status: "SENT",
         sentAt: new Date("2026-06-14T08:00:00.000Z"),
-        pendingQuestion: { topic: "nighttime_symptoms" },
+        pendingQuestion: { topic: "nighttime_symptoms", purpose: "Nighttime symptoms?", expectedResponseType: "single_choice", options: ["night_none"], askedAt: "2026-06-14T08:00:00.000Z" },
+        deferredQuestions: [],
         cycleId: "cycle_1",
         cycle: { id: "cycle_1", userId: "user_1", user: { phoneNumber: "447123456789" } },
       });
@@ -221,14 +226,24 @@ describe("scheduler", () => {
           include: { cycle: { include: { user: true } } },
         })
       );
-      expect(prisma.observation.create).toHaveBeenCalledWith(
-        expect.objectContaining({
-          data: expect.objectContaining({ concept: "nighttime_symptoms", value: "no_answer" }),
-        })
+      expect(prisma.observation.create).not.toHaveBeenCalled();
+      expect(deferPendingQuestion).toHaveBeenCalledWith(
+        prisma,
+        "ci_1",
+        expect.objectContaining({ topic: "nighttime_symptoms" })
       );
       expect(prisma.checkIn.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ status: "MISSED", pendingQuestion: expect.anything() }),
+          where: { id: "ci_1" },
+          data: expect.objectContaining({ status: "MISSED" }),
+        })
+      );
+      expect(prisma.event.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            type: "state_updated",
+            payload: expect.objectContaining({ reason: "pending_question_deferred_on_timeout" }),
+          }),
         })
       );
     });

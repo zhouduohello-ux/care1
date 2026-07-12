@@ -49,6 +49,27 @@ export function getSessionTurnBudget(): number {
   return parseIntEnv("SESSION_TURN_BUDGET", DEFAULT_SESSION_TURN_BUDGET);
 }
 
+function parseBoolEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const lowered = raw.trim().toLowerCase();
+  if (lowered === "true" || lowered === "1" || lowered === "yes") return true;
+  if (lowered === "false" || lowered === "0" || lowered === "no") return false;
+  console.warn(`[turn-manager] Invalid ${name}="${raw}"; using fallback ${fallback}`);
+  return fallback;
+}
+
+/**
+ * Whether an unanswered pending question should be deferred to the next check-in
+ * when it hits the 24h timeout, instead of being recorded as `no_answer`.
+ *
+ * Configurable via `PENDING_QUESTION_TIMEOUT_DEFERS`. Defaults to `true` so that
+ * questions are not lost when a patient is temporarily unavailable.
+ */
+export function shouldDeferOnTimeout(): boolean {
+  return parseBoolEnv("PENDING_QUESTION_TIMEOUT_DEFERS", true);
+}
+
 /** @deprecated Use {@link getMaxReprompts} instead. */
 export const MAX_REPROMPTS = DEFAULT_MAX_REPROMPTS;
 

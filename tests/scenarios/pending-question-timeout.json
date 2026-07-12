@@ -1,7 +1,7 @@
 {
   "id": "pending_question_timeout",
-  "name": "Pending question expires after 24 hours of no reply",
-  "description": "When a user leaves a check-in question unanswered for more than 24 hours, the scheduler marks it as no_answer, clears the pending question, and sets the check-in to MISSED.",
+  "name": "Pending question is deferred on 24 hour timeout",
+  "description": "When a user leaves a check-in question unanswered for more than 24 hours, the scheduler defers the pending question to the next check-in instead of marking it as no_answer. The next check-in then asks the deferred question at the start of the session.",
   "user": {
     "phoneNumber": "test_pending_timeout"
   },
@@ -9,25 +9,46 @@
     { "action": "reset" },
     { "action": "load_persona", "personaId": "controlled_asthma" },
     { "action": "advance", "to": "next_checkin" },
-    { "action": "send", "text": "not sure" },
+    { "action": "reply", "buttonId": "night_none" },
     { "action": "advance", "to": "2026-07-14T10:00:00.000Z" },
-    { "action": "trigger_expired_pending" }
+    { "action": "trigger_expired_pending" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "reply", "buttonId": "night_none" }
   ],
   "expectations": [
     {
       "afterStep": 4,
       "type": "message",
       "op": "contains",
-      "value": "didn't catch that",
+      "value": "reliever",
       "caseInsensitive": true,
-      "description": "Off-topic reply triggers a reprompt and sets a pending question"
+      "description": "Answering the first question leads to a pending reliever_use question"
     },
     {
-      "afterStep": 6,
-      "type": "observation",
-      "op": "exists",
-      "filter": { "concept": "nighttime_symptoms", "value": "no_answer" },
-      "description": "Expired pending question is recorded as no_answer"
+      "afterStep": 7,
+      "type": "message",
+      "op": "contains",
+      "value": "Before we move on",
+      "caseInsensitive": true,
+      "description": "Next check-in starts by re-raising the question that timed out"
+    },
+    {
+      "afterStep": 7,
+      "type": "message",
+      "op": "contains",
+      "value": "reliever",
+      "caseInsensitive": true,
+      "description": "Deferred question is the reliever_use question that was left unanswered"
+    },
+    {
+      "afterStep": 10,
+      "type": "message",
+      "op": "contains",
+      "value": "Brief",
+      "caseInsensitive": true,
+      "description": "After answering all questions including the deferred ones the session ends"
     }
   ]
 }
