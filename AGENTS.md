@@ -95,7 +95,7 @@ CareMemory/
 
 - 已初始化 pnpm workspaces monorepo 与根目录配置；
 - 已选定技术栈：Node.js 22 LTS + TypeScript 5.7 + Fastify 5 + PostgreSQL 16 + Prisma 6 + Redis 7 + BullMQ 5 + Next.js 15 + Playwright 1.61；
-- 已创建 `packages/db` 与 Prisma schema（三次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`），本地基础设施（`infra/docker-compose.yml`）就绪；
+- 已创建 `packages/db` 与 Prisma schema（七次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`、`20260630150000_add_platform_message_id_unique`、`20260711090253_init`、`20260711130841_add_checkin_nudge_sent_at`、`20260711134420_add_nudge_sent_event_type`），本地基础设施（`infra/docker-compose.yml`）就绪；
 - 已实现 `apps/api`（Fastify 后端 + 引擎骨架 + 本地测试工具 + Brief API + GDPR 导出/删除 + admin/metrics），可本地跑通 onboarding → check-in → Disease Card → Brief / PDF 的最小闭环；
 - 已实现 `apps/web`（Next.js Disease Card / Brief / Records / Privacy Policy 页面，含 PDF 下载按钮），已配置 vitest + @testing-library/react + jsdom，并对 `BriefActions`、`DiseaseCardModule` 组件编写了单元测试；
 - 已实现 `packages/im-core`、`packages/im-whatsapp`、`packages/engine`、`packages/disease-card`、`packages/brief-templates`；
@@ -130,6 +130,7 @@ CareMemory/
 - 已将 nudge / timeout / MAX_REPROMPTS 时间可配置化：`PENDING_QUESTION_NUDGE_AFTER_MS`、`PENDING_QUESTION_TIMEOUT_MS`、`PENDING_QUESTION_MAX_REPROMPTS`；
 - 已将 Turn Manager 统计暴露到 admin metrics；
 - 已实现 `test:e2e:turn-manager`、`test:e2e:turn-manager-max`、`test:e2e:turn-timeline`、`test:e2e:pending-timeout` 等 E2E scenario；
+- 已补充 WhatsApp MVP 模板正式文案与 Meta 提交说明文档 `docs/whatsapp-templates.md`，并在 `AGENTS.md` 关键文档索引中注册；
 - 已为 L5 对话层补充完整规格文档 `docs/l5-dialogue-spec.md`（v1.17），记录 L4→L5 消息类型、处理矩阵、实现状态与 FOLLOW-001 至 FOLLOW-009。
 
 ---

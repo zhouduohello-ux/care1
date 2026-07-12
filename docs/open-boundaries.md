@@ -3,7 +3,7 @@
 > **版本**：v0.1  
 > **日期**：2026-06-15  
 > **用途**：记录在 PRD/func-spec/tech-spec 对齐审查中发现的、尚未写入正式文档的边界问题和遗漏能力。  
-> **状态**：待决策 / 待补充进正式文档
+> **状态**：大部分 P1/P2 项已实现并写入 `docs/decisions.md` 与 `docs/func-spec.md`；剩余 B17 明确跳过（MVP 不做）。本文档保留为历史索引。
 
 ---
 
@@ -181,7 +181,7 @@
 
 **问题**：医学顾问更新 Care Strategy 后，如何重新嵌入向量数据库？
 
-**当前状态**：tech-spec 6.2 描述了 pipeline，但没有更新机制。
+**当前状态**：已实现。提供 CLI 命令 `pnpm corpus:reindex`，可重新读取 `packages/rag/src/corpus/` 下 Markdown 并生成 `packages/rag/src/corpus.ts`；Corpus 版本号已在 LLM trace 中预留字段，便于审计。
 
 **推荐决策**：
 - 提供一个 CLI 命令 `pnpm corpus:reindex`；
@@ -198,7 +198,7 @@
 
 **问题**：24h 外需要预审批模板。具体哪些模板？内容是什么？
 
-**当前状态**：tech-spec 7.4 列举了几个模板名称，但没有内容。
+**当前状态**：已实现。6 个 MVP 模板定义于 `packages/im-whatsapp/src/templates.ts`，包含英文文案、变量与智能选择逻辑；正式 Meta 提交说明见 `docs/whatsapp-templates.md`。
 
 **推荐决策**：
 MVP 至少准备以下模板（英文）：
@@ -346,6 +346,6 @@ MVP 至少准备以下模板（英文）：
 | P3 | B17 | 明确跳过（MVP 不做） |
 
 **下一步建议**：
-1. 将 B4/B9/B14/B15/B16 的关键决策追加到 `docs/decisions.md`；
-2. 更新 `AGENTS.md` 工程状态；
-3. 运行全量 typecheck / test / build / E2E 验证。
+1. 本文档中所有 P1/P2 项已同步到 `docs/decisions.md` 或实现落地；
+2. 持续运行全量 typecheck / test / build / E2E 验证，保持 main 绿色；
+3. 新增边界问题时，按本文档格式追加条目，并在决策确定后迁移到 `docs/decisions.md`。
