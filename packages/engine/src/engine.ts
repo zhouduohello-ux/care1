@@ -15,6 +15,8 @@ import {
   isAnswerToPendingQuestion,
   isAnswerRelevantWithLlm,
   buildRepromptMessage,
+  buildClarificationMessage,
+  looksLikeClarificationRequest,
   classifyNonAnswer,
   recordReprompt,
   clearPendingQuestion,
@@ -877,7 +879,7 @@ export async function processInbound(
         if (!acceptedByLlm) {
           const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
           const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-          const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, {
+          const renderOptions = {
             style: conversationStyle,
             locale: user.locale,
             cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
@@ -887,7 +889,21 @@ export async function processInbound(
               nickname: user.nickname ?? undefined,
               firstName: user.nickname ?? undefined,
             },
-          });
+          };
+
+          // Clarification request: explain the question in simpler terms without
+          // counting it as a failed reprompt attempt.
+          if (looksLikeClarificationRequest(perception.rawText)) {
+            const clarification = await buildClarificationMessage(userId, pending, renderOptions);
+            const { messages, summary } = safetyWrapWithSummary(userId, [clarification]);
+            await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+            return {
+              messages,
+              trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+            };
+          }
+
+          const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
           const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
           await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
           await recordReprompt(
