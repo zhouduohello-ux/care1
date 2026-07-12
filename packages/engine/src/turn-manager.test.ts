@@ -429,6 +429,39 @@ describe("buildClarificationMessage", () => {
     expect(message.content.text).toContain("Can you tell me more");
     expect(message.content.text).toContain("reply in your own words");
   });
+
+  it("rephrases and offers skip on the second clarification", async () => {
+    const pending = {
+      topic: "nighttime_symptoms",
+      purpose: "Track nighttime cough or wheeze over the past 2 days.",
+      expectedResponseType: "single_choice" as const,
+      options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      askedAt: new Date().toISOString(),
+      clarificationCount: 1,
+    };
+    const message = await buildClarificationMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    }, 1);
+    expect(message.content.text).toContain("Let me rephrase");
+    expect(message.content.text).toContain("SKIP");
+  });
+
+  it("suggests moving on after repeated clarifications", async () => {
+    const pending = {
+      topic: "nighttime_symptoms",
+      purpose: "Track nighttime cough or wheeze over the past 2 days.",
+      expectedResponseType: "single_choice" as const,
+      options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      askedAt: new Date().toISOString(),
+      clarificationCount: 2,
+    };
+    const message = await buildClarificationMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    }, 2);
+    expect(message.content.text).toContain("having trouble understanding");
+  });
 });
 
 describe("looksLikeSkipRequest", () => {
