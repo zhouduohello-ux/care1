@@ -11,19 +11,30 @@
     { "action": "advance", "to": "next_checkin" },
     { "action": "reply", "buttonId": "night_woke_up" },
     { "action": "reply", "buttonId": "reliever_3_plus" },
-    { "action": "send", "text": "I wheezed badly after running today" }
+    { "action": "send", "text": "I wheezed badly after running today" },
+    { "action": "send", "text": "It started about 20 minutes after I started running" },
+    { "action": "send", "text": "Yes, my chest felt tight and I was short of breath" },
+    { "action": "send", "text": "I used my reliever inhaler and it eased after a few minutes" }
   ],
   "expectations": [
     {
       "afterStep": 6,
       "type": "planner",
+      "path": "nextAction.topic",
+      "op": "eq",
+      "value": "exception_clarification",
+      "description": "Severe symptom report triggers exception mode clarifying question"
+    },
+    {
+      "afterStep": 9,
+      "type": "planner",
       "path": "nextAction.type",
       "op": "eq",
       "value": "end_session",
-      "description": "Check-in ends after budget is used"
+      "description": "Check-in ends after exception mode clarifications"
     },
     {
-      "afterStep": 6,
+      "afterStep": 9,
       "type": "diseaseCard",
       "op": "exists",
       "description": "A Disease Card is generated after the check-in"

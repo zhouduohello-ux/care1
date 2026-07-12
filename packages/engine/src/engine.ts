@@ -404,20 +404,25 @@ export async function processInbound(
   }
 
   if (perception.intent.primary === "help") {
-    const { messages, summary } = safetyWrapWithSummary(userId, [
-      {
-        userId,
-        conversationContext: { requiresSession: true, priority: "normal" },
-        content: {
-          type: "text" as const,
-          text: "CareMemory helps you record your asthma between visits. Reply with:\n• START ASTHMA to begin\n• HELP for this message\n• EXPORT MY DATA for a copy of your data\n• DELETE MY DATA to delete your account\n• STOP to pause messages\n\nIf you're having severe breathing problems, call 999 or follow your asthma action plan.",
+    const { pendingQuestion: pendingHelp } = activeCheckIn ? await getTurnState(prisma, activeCheckIn.id) : { pendingQuestion: null };
+    if (!pendingHelp) {
+      const { messages, summary } = safetyWrapWithSummary(userId, [
+        {
+          userId,
+          conversationContext: { requiresSession: true, priority: "normal" },
+          content: {
+            type: "text" as const,
+            text: "CareMemory helps you record your asthma between visits. Reply with:\n• START ASTHMA to begin\n• HELP for this message\n• EXPORT MY DATA for a copy of your data\n• DELETE MY DATA to delete your account\n• STOP to pause messages\n\nIf you're having severe breathing problems, call 999 or follow your asthma action plan.",
+          },
         },
-      },
-    ]);
-    return {
-      messages,
-      trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-    };
+      ]);
+      return {
+        messages,
+        trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+      };
+    }
+    // Fall through to Turn Manager when the user has an active pending question:
+    // phrases like "I don't understand" should trigger a reprompt, not the help menu.
   }
 
   if (perception.intent.primary === "stop") {
@@ -897,11 +902,17 @@ export async function processInbound(
       },
     });
 
-    // Generate a Brief for this check-in session (30-day access token)
+    // Generate or update a Brief for this cycle (30-day access token)
     const briefAccessToken = crypto.randomBytes(32).toString("hex");
     const briefExpiresAt = new Date(context.now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    const brief = await prisma.brief.create({
-      data: {
+    const brief = await prisma.brief.upsert({
+      where: { cycleId: cycle.id },
+      update: {
+        diseaseCardId: diseaseCardRecord.id,
+        accessToken: briefAccessToken,
+        expiresAt: briefExpiresAt,
+      },
+      create: {
         cycleId: cycle.id,
         diseaseCardId: diseaseCardRecord.id,
         webUrl: "", // updated below once we have the id
