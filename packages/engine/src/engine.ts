@@ -17,6 +17,8 @@ import {
   buildRepromptMessage,
   buildClarificationMessage,
   looksLikeClarificationRequest,
+  looksLikeSkipRequest,
+  recordSkippedQuestion,
   classifyNonAnswer,
   recordReprompt,
   clearPendingQuestion,
@@ -903,24 +905,41 @@ export async function processInbound(
             };
           }
 
-          const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
-          const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-          await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
-          await recordReprompt(
-            prisma,
-            user.id,
-            cycle.id,
-            activeCheckIn.id,
-            pending,
-            nextRepromptCount,
-            classifyNonAnswer(perception),
-            context.now,
-            perception.traceId
-          );
-          return {
-            messages,
-            trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-          };
+          // Skip request: the user explicitly wants to skip this question.
+          // Record a no_answer observation, clear the pending question, and let
+          // the planner move on to the next topic.
+          if (looksLikeSkipRequest(perception.rawText)) {
+            await recordSkippedQuestion(
+              prisma,
+              user.id,
+              cycle.id,
+              activeCheckIn.id,
+              pending,
+              inboundEventId,
+              context.now,
+              perception.traceId
+            );
+            // Fall through to L4 Planner so it can ask the next question.
+          } else {
+            const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
+            const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+            await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+            await recordReprompt(
+              prisma,
+              user.id,
+              cycle.id,
+              activeCheckIn.id,
+              pending,
+              nextRepromptCount,
+              classifyNonAnswer(perception),
+              context.now,
+              perception.traceId
+            );
+            return {
+              messages,
+              trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+            };
+          }
         }
       }
     }
