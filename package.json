@@ -33,7 +33,8 @@
     "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
     "typecheck": "turbo run typecheck",
     "test:e2e:severe-symptom": "tsx tests/scenarios/run-scenario.ts tests/scenarios/severe-symptom-immediate-end.json",
-    "test:e2e:clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-clarification.json"
+    "test:e2e:clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-clarification.json",
+    "test:e2e:skip": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-skip.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

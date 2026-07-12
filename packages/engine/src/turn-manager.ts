@@ -1,5 +1,5 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
-import { Prisma, type PrismaClient } from "@carememory/db";
+import { Prisma, type PrismaClient, type ObservationCategory } from "@carememory/db";
 import type { PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
 import { matchOptionSynonym, matchScaleWord, getLocale } from "./dialogue-locales/index.js";
@@ -330,6 +330,67 @@ export async function buildClarificationMessage(
   };
 
   return renderMessage(userId, clarificationOutput, options);
+}
+
+const SKIP_PATTERNS = [
+  /^skip$/i,
+  /skip this question/i,
+  /skip it/i,
+  /next question/i,
+  /pass/i,
+  /i don't want to answer/i,
+  /i'd rather not answer/i,
+  /i'd rather not say/i,
+  /prefer not to answer/i,
+  /don't ask me that/i,
+];
+
+export function looksLikeSkipRequest(text: string): boolean {
+  return SKIP_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function recordSkippedQuestion(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  eventId: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.observation.create({
+    data: {
+      userId,
+      cycleId,
+      eventId,
+      timestamp: now,
+      category: "subjective" as ObservationCategory,
+      concept: pending.topic,
+      value: "no_answer" as Prisma.InputJsonValue,
+      attributes: { reason: "user_skipped" } as Prisma.InputJsonValue,
+      confidence: 1,
+      extractedBy: "rule",
+    },
+  });
+
+  await clearPendingQuestion(prisma, checkInId);
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "user_action" as const,
+      payload: {
+        action: "skip_question",
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
 }
 
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import type { PerceptionResult, PlannerOutput } from "./types.js";
+import { Prisma } from "@carememory/db";
 import type { LLMClient } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
@@ -9,6 +10,8 @@ import {
   buildRepromptMessage,
   buildClarificationMessage,
   looksLikeClarificationRequest,
+  looksLikeSkipRequest,
+  recordSkippedQuestion,
   classifyNonAnswer,
   getTurnState,
   recordReprompt,
@@ -403,5 +406,85 @@ describe("buildClarificationMessage", () => {
     expect(message.content.type).toBe("text");
     expect(message.content.text).toContain("Can you tell me more");
     expect(message.content.text).toContain("reply in your own words");
+  });
+});
+
+describe("looksLikeSkipRequest", () => {
+  it("returns true for skip phrases", () => {
+    expect(looksLikeSkipRequest("skip")).toBe(true);
+    expect(looksLikeSkipRequest("Skip this question")).toBe(true);
+    expect(looksLikeSkipRequest("Next question")).toBe(true);
+    expect(looksLikeSkipRequest("I don't want to answer")).toBe(true);
+    expect(looksLikeSkipRequest("I'd rather not say")).toBe(true);
+    expect(looksLikeSkipRequest("pass")).toBe(true);
+  });
+
+  it("returns false for normal answers", () => {
+    expect(looksLikeSkipRequest("none")).toBe(false);
+    expect(looksLikeSkipRequest("I woke up twice")).toBe(false);
+    expect(looksLikeSkipRequest("yes")).toBe(false);
+    expect(looksLikeSkipRequest("What do you mean?")).toBe(false);
+  });
+});
+
+describe("recordSkippedQuestion", () => {
+  it("creates no_answer observation, clears pending, and writes user_action event", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const observationCreate = vi.fn().mockResolvedValue(undefined);
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      observation: { create: observationCreate },
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordSkippedQuestion(
+      prisma,
+      "user_1",
+      "cycle_1",
+      "checkin_1",
+      pending,
+      "event_1",
+      new Date("2026-07-11T00:00:00Z"),
+      "trace_1"
+    );
+
+    expect(observationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          eventId: "event_1",
+          category: "subjective",
+          concept: "reliever_use",
+          value: "no_answer",
+          extractedBy: "rule",
+        }),
+      })
+    );
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "user_action",
+          traceId: "trace_1",
+        }),
+      })
+    );
   });
 });
