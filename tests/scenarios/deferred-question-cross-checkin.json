@@ -1,0 +1,58 @@
+{
+  "id": "deferred_question_cross_checkin",
+  "name": "Deferred question persists across check-ins",
+  "description": "When a check-in ends with an unhandled deferred question (e.g. due to a tight session turn budget), the next check-in inherits the deferred question and asks it at the start of the new session. Run the API with SESSION_TURN_BUDGET=2 to prevent same-session re-raise.",
+  "user": {
+    "phoneNumber": "test_deferred_cross_checkin"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "I have a cough today" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 3,
+      "type": "message",
+      "op": "contains",
+      "value": "night",
+      "caseInsensitive": true,
+      "description": "First check-in starts with the nighttime symptoms question"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "not_contains",
+      "value": "Before we finish",
+      "caseInsensitive": true,
+      "description": "Tight turn budget prevents same-session re-raise of the deferred question"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "Before we move on",
+      "caseInsensitive": true,
+      "description": "Next check-in starts by re-raising the inherited deferred question"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "night",
+      "caseInsensitive": true,
+      "description": "Inherited question is the original nighttime symptoms question"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "Brief",
+      "caseInsensitive": true,
+      "description": "After answering the inherited question the session ends and the Brief is ready"
+    }
+  ]
+}

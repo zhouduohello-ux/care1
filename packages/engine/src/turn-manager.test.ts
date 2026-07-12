@@ -32,7 +32,10 @@ import {
   detectTopicShift,
   deferPendingQuestion,
   popDeferredQuestion,
+  popNextDeferredQuestion,
   buildDeferredQuestionMessage,
+  filterAnsweredDeferredQuestions,
+  loadDeferredQuestionsFromPreviousCheckIn,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -1014,5 +1017,96 @@ describe("buildDeferredQuestionMessage", () => {
     expect(message.content.type).toBe("buttons");
     expect(message.content.text).toContain("Before we finish");
     expect(message.content.text).toContain(pending.purpose);
+  });
+});
+
+describe("filterAnsweredDeferredQuestions", () => {
+  it("removes deferred questions whose topic already has a recent observation", () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+      { topic: "activity_limitation", purpose: "Activity?", expectedResponseType: "single_choice" as const, options: ["activity_no"], askedAt: "", deferredAt: "2026-01-01T00:00:01.000Z" },
+    ];
+    const observations = [{ concept: "reliever_use" }];
+    const result = filterAnsweredDeferredQuestions(deferred, observations);
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toBe("activity_limitation");
+  });
+
+  it("returns all deferred questions when none are answered", () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const result = filterAnsweredDeferredQuestions(deferred, []);
+    expect(result).toHaveLength(1);
+  });
+});
+
+describe("loadDeferredQuestionsFromPreviousCheckIn", () => {
+  it("loads deferred questions from the most recent check-in in the cycle", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const prisma = {
+      checkIn: {
+        findFirst: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await loadDeferredQuestionsFromPreviousCheckIn(prisma, "cycle_1", "checkin_2");
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toBe("reliever_use");
+  });
+});
+
+describe("popNextDeferredQuestion", () => {
+  it("pops the oldest unanswered deferred question", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+      { topic: "activity_limitation", purpose: "Activity?", expectedResponseType: "single_choice" as const, options: ["activity_no"], askedAt: "", deferredAt: "2026-01-01T00:00:01.000Z" },
+    ];
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popNextDeferredQuestion(prisma, "checkin_1", [{ concept: "reliever_use" }]);
+    expect(result?.topic).toBe("activity_limitation");
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          pendingQuestion: deferred[1],
+          deferredQuestions: Prisma.JsonNull,
+          repromptCount: 0,
+        }),
+      })
+    );
+  });
+
+  it("returns undefined when all deferred questions are already answered", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popNextDeferredQuestion(prisma, "checkin_1", [{ concept: "reliever_use" }]);
+    expect(result).toBeUndefined();
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          deferredQuestions: Prisma.JsonNull,
+        }),
+      })
+    );
   });
 });

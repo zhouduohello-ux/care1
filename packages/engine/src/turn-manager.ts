@@ -1010,6 +1010,40 @@ export interface DeferredQuestion extends PendingQuestion {
 }
 
 /**
+ * Load deferred questions from the most recent check-in in the same cycle that
+ * still has an unhandled deferred list. Used when starting a new check-in so
+ * questions skipped or shifted away from in the previous session are not lost.
+ */
+export async function loadDeferredQuestionsFromPreviousCheckIn(
+  prisma: PrismaClient,
+  cycleId: string,
+  excludeCheckInId?: string
+): Promise<DeferredQuestion[]> {
+  const previous = await prisma.checkIn.findFirst({
+    where: {
+      cycleId,
+      id: excludeCheckInId ? { not: excludeCheckInId } : undefined,
+      deferredQuestions: { not: Prisma.JsonNull },
+    },
+    orderBy: { scheduledAt: "desc" },
+    select: { deferredQuestions: true },
+  });
+  return (previous?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+}
+
+/**
+ * Remove deferred questions whose topic has already been answered in a recent
+ * observation. Prevents re-asking a question the user already provided.
+ */
+export function filterAnsweredDeferredQuestions(
+  deferred: DeferredQuestion[],
+  observations: Array<{ concept: string }>
+): DeferredQuestion[] {
+  const answeredTopics = new Set(observations.map((o) => o.concept));
+  return deferred.filter((d) => !answeredTopics.has(d.topic));
+}
+
+/**
  * Move the current pending question into the check-in's deferred list so it
  * can be re-raised later, and clear the active pending question.
  */
@@ -1059,6 +1093,48 @@ export async function popDeferredQuestion(
   if (deferred.length === 0) return undefined;
 
   const [next, ...rest] = deferred;
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      deferredQuestions: rest.length > 0 ? (rest as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      pendingQuestion: next as unknown as Prisma.InputJsonValue,
+      repromptCount: 0,
+    },
+  });
+
+  return next;
+}
+
+/**
+ * Pop the oldest deferred question that has not already been answered in the
+ * provided observations. Answered questions are dropped from the stored list.
+ *
+ * This is useful when re-raising deferred questions at the end of a session:
+ * a topic may have been answered later in the same session, so we should not
+ * ask it again.
+ */
+export async function popNextDeferredQuestion(
+  prisma: PrismaClient,
+  checkInId: string,
+  observations: Array<{ concept: string }>
+): Promise<PendingQuestion | undefined> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { deferredQuestions: true },
+  });
+  const deferred = (current?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+  const unanswered = filterAnsweredDeferredQuestions(deferred, observations);
+  if (unanswered.length === 0) {
+    if (deferred.length > 0) {
+      await prisma.checkIn.update({
+        where: { id: checkInId },
+        data: { deferredQuestions: Prisma.JsonNull },
+      });
+    }
+    return undefined;
+  }
+
+  const [next, ...rest] = unanswered;
   await prisma.checkIn.update({
     where: { id: checkInId },
     data: {
