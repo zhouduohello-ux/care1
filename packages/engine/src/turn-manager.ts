@@ -41,6 +41,14 @@ export function getMaxReprompts(): number {
   return parseIntEnv("PENDING_QUESTION_MAX_REPROMPTS", DEFAULT_MAX_REPROMPTS);
 }
 
+/** Default session-level turn budget (system outbound turns per check-in). */
+export const DEFAULT_SESSION_TURN_BUDGET = 12;
+
+/** Session turn budget; configurable via SESSION_TURN_BUDGET. */
+export function getSessionTurnBudget(): number {
+  return parseIntEnv("SESSION_TURN_BUDGET", DEFAULT_SESSION_TURN_BUDGET);
+}
+
 /** @deprecated Use {@link getMaxReprompts} instead. */
 export const MAX_REPROMPTS = DEFAULT_MAX_REPROMPTS;
 

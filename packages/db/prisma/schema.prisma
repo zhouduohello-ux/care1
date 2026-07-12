@@ -98,6 +98,8 @@ model CheckIn {
   questionHistory       Json?
   nudgeSentAt           DateTime?
   reminderSentAt        DateTime?
+  turnCount             Int         @default(0)
+  turnBudget            Int         @default(12)
 
   events           Event[]
 

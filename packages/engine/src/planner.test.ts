@@ -64,6 +64,21 @@ describe("planner", () => {
     expect(output.nextAction.type).toBe("end_session");
   });
 
+  it("ends the session when turn budget has one turn left", async () => {
+    const input = baseInput();
+    input.conversationContext.turnsRemaining = 1;
+    const output = await plan(input);
+    expect(output.nextAction.type).toBe("end_session");
+  });
+
+  it("ends exception mode when turn budget has one turn left", async () => {
+    const input = baseInput();
+    input.conversationContext.inExceptionMode = true;
+    input.conversationContext.turnsRemaining = 1;
+    const output = await plan(input);
+    expect(output.nextAction.type).toBe("end_session");
+  });
+
   it("enters exception mode and asks clarifying questions", async () => {
     const input = baseInput();
     input.conversationContext.inExceptionMode = true;
