@@ -69,12 +69,69 @@ export async function getTurnState(prisma: PrismaClient, checkInId: string): Pro
   };
 }
 
-export function isAnswerToPendingQuestion(
+
+export interface LlmRelevanceResult {
+  isAnswer: boolean;
+  /** Confidence in [0, 1] that the reply actually answers the pending question. */
+  confidence: number;
+  /** Natural language explanation, not shown to the user. */
+  reasoning?: string;
+}
+
+function parseFloatEnv(name: string, fallback: number, min: number, max: number): number {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed) || parsed < min || parsed > max) {
+    console.warn(`[turn-manager] Invalid ${name}="${raw}"; using fallback ${fallback}`);
+    return fallback;
+  }
+  return parsed;
+}
+
+/** Minimum LLM confidence required to accept a free-text reply as an answer. */
+export function getLlmAnswerRelevanceThreshold(): number {
+  return parseFloatEnv("LLM_ANSWER_RELEVANCE_THRESHOLD", 0.7, 0, 1);
+}
+
+export interface AnswerConfidenceResult {
+  /** Whether the reply answers the pending question. */
+  isAnswer: boolean;
+  /** Confidence score in [0, 1]. */
+  confidence: number;
+  /** How the answer was matched. */
+  matchMethod:
+    | "exact_option"
+    | "synonym"
+    | "scale_number"
+    | "scale_word"
+    | "text_observation"
+    | "text"
+    | "llm"
+    | "partial"
+    | "none";
+  /** Optional explanation for the score. */
+  reasoning?: string;
+}
+
+/**
+ * Evaluate whether a user reply answers the pending question and score the confidence.
+ *
+ * Confidence scoring reflects match quality:
+ * - Exact option/button/list match: 1.0
+ * - Synonym or scale-word match: 0.9
+ * - Scale number: 1.0
+ * - Text question with a topic observation from perception: 0.8
+ * - Text question without a topic observation: 0.6
+ * - Multi-select partial match: proportional to matched options / total meaningful tokens
+ * - No match: 0.0
+ */
+export function evaluateAnswerToPendingQuestion(
   message: InboundMessage,
   perception: PerceptionResult,
   pending: PendingQuestion,
   localeCode?: string
-): boolean {
+): AnswerConfidenceResult {
   const locale = localeCode ? getLocale(localeCode) : undefined;
   const nonAnswerIntents = new Set([
     "question",
@@ -86,57 +143,85 @@ export function isAnswerToPendingQuestion(
     "initiate",
     "correction",
   ]);
-  if (nonAnswerIntents.has(perception.intent.primary)) return false;
+  if (nonAnswerIntents.has(perception.intent.primary)) {
+    return { isAnswer: false, confidence: 0, matchMethod: "none", reasoning: `non-answer intent: ${perception.intent.primary}` };
+  }
 
-  if (pending.expectedResponseType === "text") return true;
+  if (pending.expectedResponseType === "text") {
+    const topicObservation = perception.extractedObservations.find((o) => o.concept === pending.topic);
+    if (topicObservation) {
+      return { isAnswer: true, confidence: 0.8, matchMethod: "text_observation", reasoning: "perception extracted observation for pending topic" };
+    }
+    return { isAnswer: true, confidence: 0.6, matchMethod: "text", reasoning: "free-text reply to text question" };
+  }
 
   const options = pending.options ?? [];
   const optionSet = new Set(options.map((o) => o.toLowerCase()));
 
   if (message.content.type === "button_reply" && message.content.buttonId) {
-    return optionSet.has(message.content.buttonId.toLowerCase());
+    const id = message.content.buttonId.toLowerCase();
+    if (optionSet.has(id)) {
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact button option id" };
+    }
   }
 
   if (message.content.type === "list_reply" && message.content.listId) {
-    return optionSet.has(message.content.listId.toLowerCase());
+    const id = message.content.listId.toLowerCase();
+    if (optionSet.has(id)) {
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact list option id" };
+    }
   }
 
   const text = (message.content.text ?? "").trim().toLowerCase();
+
   if (pending.expectedResponseType === "scale") {
-    if (/^[1-5]$/.test(text)) return true;
-    return locale ? matchScaleWord(locale, text) !== undefined : false;
+    if (/^[1-5]$/.test(text)) {
+      return { isAnswer: true, confidence: 1, matchMethod: "scale_number", reasoning: "numeric scale 1-5" };
+    }
+    if (locale && matchScaleWord(locale, text) !== undefined) {
+      return { isAnswer: true, confidence: 0.9, matchMethod: "scale_word", reasoning: "scale word match" };
+    }
   }
 
   if (pending.expectedResponseType === "single_choice") {
-    if (optionSet.has(text)) return true;
+    if (optionSet.has(text)) {
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact option id text" };
+    }
     if (locale) {
-      return options.some((optionId) => matchOptionSynonym(locale, optionId, text));
+      const matched = options.some((optionId) => matchOptionSynonym(locale, optionId, text));
+      if (matched) {
+        return { isAnswer: true, confidence: 0.9, matchMethod: "synonym", reasoning: "option synonym match" };
+      }
     }
   }
 
   if (pending.expectedResponseType === "multi_select") {
-    const { matched, hasMeaningfulUnmatched } = extractMultiSelectAnswers(
-      text,
-      options,
-      localeCode
-    );
-    // Accept as a full answer if we matched at least one option and nothing
-    // meaningful was left unexplained.
-    return matched.length > 0 && !hasMeaningfulUnmatched;
+    const { matched, hasMeaningfulUnmatched } = extractMultiSelectAnswers(text, options, localeCode);
+    if (matched.length > 0 && !hasMeaningfulUnmatched) {
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "all meaningful tokens matched options" };
+    }
+    if (matched.length > 0 && hasMeaningfulUnmatched) {
+      // Partial answer: the reply is not a full answer, but we understood some of it.
+      const confidence = Math.max(0.4, Math.min(0.9, matched.length / (matched.length + 1)));
+      return { isAnswer: false, confidence, matchMethod: "partial", reasoning: `partial match: ${matched.length} option(s) understood` };
+    }
   }
 
   // Accept free-text replies when perception extracted an observation for the pending topic.
   if (perception.extractedObservations.some((o) => o.concept === pending.topic)) {
-    return true;
+    return { isAnswer: true, confidence: 0.8, matchMethod: "text_observation", reasoning: "perception extracted observation for pending topic" };
   }
 
-  return false;
+  return { isAnswer: false, confidence: 0, matchMethod: "none", reasoning: "no rule-based match" };
 }
 
-export interface LlmRelevanceResult {
-  isAnswer: boolean;
-  /** Natural language explanation, not shown to the user. */
-  reasoning?: string;
+export function isAnswerToPendingQuestion(
+  message: InboundMessage,
+  perception: PerceptionResult,
+  pending: PendingQuestion,
+  localeCode?: string
+): boolean {
+  return evaluateAnswerToPendingQuestion(message, perception, pending, localeCode).isAnswer;
 }
 
 export async function isAnswerRelevantWithLlm(
@@ -151,11 +236,13 @@ Your job is to decide whether a patient's free-text reply answers a specific che
 Return ONLY valid JSON matching this schema:
 {
   "isAnswer": boolean,
+  "confidence": number between 0 and 1,
   "reasoning": string
 }
 Rules:
 - Return isAnswer=true if the reply contains the information the question is asking for, even if phrased informally.
 - Return isAnswer=false if the reply is off-topic, asks a question, asks for help, or does not address the question.
+- Confidence should reflect your certainty: 1.0 = definitely answers, 0.0 = definitely not an answer.
 - Do not diagnose or give treatment advice.`;
 
   const userPrompt = `Question purpose: ${pending.purpose}
@@ -175,10 +262,14 @@ Perception extracted observations: ${JSON.stringify(perception.extractedObservat
       await onLlmCall(llmClient.modelName, messages, content, usage);
     }
     const parsed = JSON.parse(content) as Partial<LlmRelevanceResult>;
-    return { isAnswer: !!parsed.isAnswer, reasoning: parsed.reasoning };
+    const isAnswer = !!parsed.isAnswer;
+    const confidence = typeof parsed.confidence === "number" && !Number.isNaN(parsed.confidence)
+      ? Math.max(0, Math.min(1, parsed.confidence))
+      : (isAnswer ? 0.7 : 0.3);
+    return { isAnswer, confidence, reasoning: parsed.reasoning };
   } catch {
     // Any LLM failure is treated as "not an answer" so we fallback to reprompt.
-    return { isAnswer: false };
+    return { isAnswer: false, confidence: 0 };
   }
 }
 
