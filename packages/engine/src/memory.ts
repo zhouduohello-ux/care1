@@ -42,7 +42,8 @@ export async function saveOutboundMessages(
   cycleId?: string,
   now: Date = new Date(),
   salt?: string,
-  traceId?: string
+  traceId?: string,
+  checkInId?: string
 ): Promise<string[]> {
   const keys: string[] = [];
   for (let i = 0; i < messages.length; i++) {
@@ -65,6 +66,12 @@ export async function saveOutboundMessages(
       },
     });
     keys.push(idempotencyKey);
+  }
+  if (checkInId && messages.length > 0) {
+    await prisma.checkIn.update({
+      where: { id: checkInId },
+      data: { turnCount: { increment: messages.length } },
+    });
   }
   return keys;
 }

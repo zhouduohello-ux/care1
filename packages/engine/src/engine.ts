@@ -31,6 +31,7 @@ import {
   setPendingQuestion,
   getMaxReprompts,
   getLlmAnswerRelevanceThreshold,
+  getSessionTurnBudget,
   MAX_REPROMPTS,
   type PendingQuestion,
 } from "./turn-manager.js";
@@ -459,7 +460,7 @@ export async function processInbound(
           },
         },
       ]);
-      await saveOutboundMessages(prisma, user.id, messages, recentCycle.id, new Date(), inboundEventId, perception.traceId);
+      await saveOutboundMessages(prisma, user.id, messages, recentCycle.id, new Date(), inboundEventId, perception.traceId, undefined);
       return {
         messages,
         trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -635,7 +636,7 @@ export async function processInbound(
       });
       const { messages } = askNext(userId, { ...user, consentGiven: true });
       const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
-      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId);
+      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
       if (perception.extractedObservations.length > 0) {
         await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
       }
@@ -652,7 +653,7 @@ export async function processInbound(
       if (getPendingOnboardingField(user)) {
         const { messages } = askNext(userId, user);
         const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
-        await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId);
+        await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
         if (perception.extractedObservations.length > 0) {
           await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
         }
@@ -668,7 +669,7 @@ export async function processInbound(
     if (pending) {
       const { messages } = await handleOnboardingInput(prisma, user, cycle, perception.rawText, context.now);
       const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
-      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId);
+      await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
       if (perception.extractedObservations.length > 0) {
         await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
       }
@@ -713,7 +714,7 @@ export async function processInbound(
     if (perception.extractedObservations.length > 0) {
       await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
     }
-    await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+    await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
 
     // Severe symptoms during an active check-in end the session immediately,
     // record an adverse event, and generate the Disease Card / Brief.
@@ -770,7 +771,7 @@ export async function processInbound(
     if (perception.extractedObservations.length > 0) {
       await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
     }
-    await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+    await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -913,7 +914,7 @@ export async function processInbound(
                 },
               };
               const { messages, summary } = safetyWrapWithSummary(userId, [moveOnMessage]);
-              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               preOutboundMessages = messages;
               // Fall through to L4 Planner to ask the next question.
             } else {
@@ -947,7 +948,7 @@ export async function processInbound(
               });
 
               const { messages, summary } = safetyWrapWithSummary(userId, [clarification]);
-              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               return {
                 messages,
                 trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -978,7 +979,7 @@ export async function processInbound(
                 renderOptions
               );
               const { messages, summary } = safetyWrapWithSummary(userId, [previousQuestionMessage]);
-              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
 
               await prisma.event.create({
                 data: {
@@ -1069,7 +1070,7 @@ export async function processInbound(
                 });
 
                 const { messages, summary } = safetyWrapWithSummary(userId, [followUp]);
-                await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+                await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
                 return {
                   messages,
                   trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -1129,7 +1130,7 @@ export async function processInbound(
             if (!acceptedByLlm) {
               const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
               const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               await recordReprompt(
                 prisma,
                 user.id,
@@ -1188,6 +1189,7 @@ export async function processInbound(
       intentStack: [],
       questionsAskedThisSession: activeCheckIn?.questionsAsked ?? 0,
       budgetRemaining: activeCheckIn?.budgetRemaining ?? 3,
+      turnsRemaining: activeCheckIn ? activeCheckIn.turnBudget - activeCheckIn.turnCount : undefined,
       lastUserMessage: perception.rawText,
       inExceptionMode: activeCheckIn?.inExceptionMode ?? false,
       exceptionQuestionsAsked: activeCheckIn?.exceptionQuestionsAsked ?? 0,
@@ -1199,8 +1201,31 @@ export async function processInbound(
     },
   };
 
-  const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
+  let plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, user.id, cycle.id, plannerOutput, perception.traceId);
+
+  // L5 session turn budget: if the planner still wants to ask but we have no
+  // turns left, force a graceful end_session so the check-in cannot run forever.
+  const turnsRemaining = activeCheckIn ? activeCheckIn.turnBudget - activeCheckIn.turnCount : undefined;
+  if (
+    activeCheckIn &&
+    turnsRemaining !== undefined &&
+    turnsRemaining <= 0 &&
+    plannerOutput.nextAction.type !== "end_session"
+  ) {
+    plannerOutput = {
+      reasoning: "Session turn budget exhausted; forcing end_session.",
+      sessionObjective: "Close check-in after reaching the session turn limit.",
+      nextAction: {
+        type: "end_session",
+        topic: "closing",
+        purpose: "Thanks for your updates. Your Disease Card will be updated shortly.",
+        budgetCost: 0,
+      },
+      safetyFlag: "none",
+      updatePatientState: { updateNarrative: true },
+    };
+  }
 
   // L5 Dialogue
   const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
@@ -1265,7 +1290,8 @@ export async function processInbound(
     cycle.id,
     new Date(),
     inboundEventId,
-    perception.traceId
+    perception.traceId,
+    activeCheckIn?.id
   );
 
   // Prepend any messages that were already sent from Turn Manager before
@@ -1337,6 +1363,7 @@ export async function handleCheckInTrigger(
   }
 
   const baseBudget = hasControllerMedication(cycle.user.medications as unknown as MedicationBaseline | undefined) ? 4 : 3;
+  const turnBudget = getSessionTurnBudget();
 
   // Create check-in as SCHEDULED first, then update to SENT after messages are sent
   const checkIn = await prisma.checkIn.create({
@@ -1345,6 +1372,7 @@ export async function handleCheckInTrigger(
       scheduledAt: context.now,
       status: "SCHEDULED",
       budgetRemaining: baseBudget,
+      turnBudget,
     },
   });
   await prisma.event.create({
@@ -1380,6 +1408,7 @@ export async function handleCheckInTrigger(
       intentStack: [],
       questionsAskedThisSession: 0,
       budgetRemaining: baseBudget,
+      turnsRemaining: turnBudget,
       inExceptionMode: false,
       exceptionQuestionsAsked: 0,
       conversationStyle: getBucket(cycle.user.phoneNumber, "conversation_style").variant,
@@ -1434,7 +1463,8 @@ export async function handleCheckInTrigger(
     cycle.id,
     new Date(),
     checkIn.id,
-    undefined
+    undefined,
+    checkIn.id
   );
 
   const pending = pendingQuestionFromPlannerOutput(plannerOutput);

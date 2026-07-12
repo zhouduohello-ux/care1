@@ -88,6 +88,7 @@ export interface PlannerInput {
     intentStack: string[];
     questionsAskedThisSession: number;
     budgetRemaining: number;
+    turnsRemaining?: number;
     lastUserMessage?: string;
     inExceptionMode: boolean;
     exceptionQuestionsAsked?: number;

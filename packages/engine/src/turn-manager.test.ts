@@ -23,7 +23,9 @@ import {
   setPendingQuestion,
   getMaxReprompts,
   getLlmAnswerRelevanceThreshold,
+  getSessionTurnBudget,
   DEFAULT_MAX_REPROMPTS,
+  DEFAULT_SESSION_TURN_BUDGET,
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
@@ -834,5 +836,36 @@ describe("buildPartialAnswerFollowUpMessage", () => {
     });
     expect(message.content.type).toBe("text");
     expect(message.content.text).toContain("anything else");
+  });
+});
+
+describe("getSessionTurnBudget", () => {
+  const originalEnv = process.env.SESSION_TURN_BUDGET;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.SESSION_TURN_BUDGET;
+    } else {
+      process.env.SESSION_TURN_BUDGET = originalEnv;
+    }
+  });
+
+  it("returns the default session turn budget", () => {
+    delete process.env.SESSION_TURN_BUDGET;
+    expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
+  });
+
+  it("reads SESSION_TURN_BUDGET from environment", () => {
+    process.env.SESSION_TURN_BUDGET = "8";
+    expect(getSessionTurnBudget()).toBe(8);
+  });
+
+  it("falls back to default for invalid values", () => {
+    process.env.SESSION_TURN_BUDGET = "not-a-number";
+    expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
+    process.env.SESSION_TURN_BUDGET = "-1";
+    expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
+    process.env.SESSION_TURN_BUDGET = "1.5";
+    expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
   });
 });

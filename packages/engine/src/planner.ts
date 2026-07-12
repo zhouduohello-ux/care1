@@ -12,7 +12,11 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
   // Exception mode: clarify up to 3 questions, then close with safety guidance
   if (conversationContext.inExceptionMode) {
     const exceptionIndex = conversationContext.exceptionQuestionsAsked ?? 0;
-    if (exceptionIndex >= EXCEPTION_QUESTIONS.length || conversationContext.budgetRemaining <= 0) {
+    if (
+      exceptionIndex >= EXCEPTION_QUESTIONS.length ||
+      conversationContext.budgetRemaining <= 0 ||
+      (conversationContext.turnsRemaining !== undefined && conversationContext.turnsRemaining <= 1)
+    ) {
       return endSession(
         "Thanks for sharing. If these symptoms persist or worsen, contact your GP or call 111. Call 999 if you're struggling to breathe."
       );
@@ -43,8 +47,8 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
     return safetyResponse("possible_adverse_event", "You reported a possible reaction. Please contact your GP or pharmacist, or call 111 if it feels serious.");
   }
 
-  // End session if budget exhausted or objective likely complete
-  if (conversationContext.budgetRemaining <= 0) {
+  // End session if budget exhausted, turn budget exhausted, or objective likely complete
+  if (conversationContext.budgetRemaining <= 0 || (conversationContext.turnsRemaining !== undefined && conversationContext.turnsRemaining <= 1)) {
     return endSession("All questions answered. Thank you for checking in.");
   }
 
@@ -123,13 +127,14 @@ You must return ONLY valid JSON matching this schema:
 }
 Rules:
 - Choose the next uncovered asthma control topic from: ${availableTopics}.
-- If all topics are covered or budget is exhausted, use type "end_session".
+- If all topics are covered, budget is exhausted, or turns remaining is 1 or less, use type "end_session".
 - Do not diagnose or give treatment advice.
 - ${styleInstruction}`;
 
   const userPrompt = `Disease: ${input.patientContext.disease}
 Cycle day: ${input.patientContext.cycleDay}
 Budget remaining: ${input.conversationContext.budgetRemaining}
+Turns remaining: ${input.conversationContext.turnsRemaining ?? "unknown"}
 Recent observations: ${JSON.stringify(input.patientContext.recentObservations)}
 Already asked topics: ${JSON.stringify([...askedTopics])}
 Current intent: ${input.conversationContext.currentIntent}`;
