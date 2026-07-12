@@ -2,7 +2,7 @@ import type { PlannerInput, PlannerOutput, Observation } from "./types.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
 import type { LlmAuditCallback } from "./perception.js";
 import { loadDiseaseCorpus, searchCorpus } from "@carememory/rag";
-import { CHECKIN_QUESTIONS, EXCEPTION_QUESTIONS, getCheckInQuestion, getExceptionQuestion, type QuestionDefinition } from "./question-bank.js";
+import { buildCheckInQuestions, EXCEPTION_QUESTIONS, getCheckInQuestion, getExceptionQuestion, type MedicationBaseline, type QuestionDefinition } from "./question-bank.js";
 
 const DISEASE_CORPUS = loadDiseaseCorpus("asthma");
 
@@ -48,8 +48,9 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
     return endSession("All questions answered. Thank you for checking in.");
   }
 
+  const questions = buildCheckInQuestions(patientContext.medications);
   const askedTopics = new Set(patientContext.recentObservations.map((o) => o.concept));
-  const nextQuestion = CHECKIN_QUESTIONS.find((q) => !askedTopics.has(q.topic));
+  const nextQuestion = questions.find((q) => !askedTopics.has(q.topic));
 
   if (!nextQuestion) {
     return endSession("Thank you for your updates. Your Disease Card will be updated shortly.");
@@ -57,7 +58,7 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
 
   if (llmClient && allowLlm) {
     try {
-      return await planWithLlm(input, askedTopics, nextQuestion, llmClient, onLlmCall);
+      return await planWithLlm(input, askedTopics, nextQuestion, questions, llmClient, onLlmCall);
     } catch {
       // Fall through to rule-based planner
     }
@@ -92,6 +93,7 @@ async function planWithLlm(
   input: PlannerInput,
   askedTopics: Set<string>,
   fallbackQuestion: QuestionDefinition,
+  questions: QuestionDefinition[],
   llmClient: LLMClient,
   onLlmCall?: LlmAuditCallback
 ): Promise<PlannerOutput> {
@@ -100,6 +102,8 @@ async function planWithLlm(
     style === "v2"
       ? "Use a warm, concise, and encouraging tone. Keep questions short and action-oriented."
       : "Keep purpose concise and patient-friendly.";
+
+  const availableTopics = questions.map((q) => q.topic).join(", ");
 
   const systemPrompt = `You are the planning layer of CareMemory, a UK asthma follow-up assistant.
 You must return ONLY valid JSON matching this schema:
@@ -118,7 +122,7 @@ You must return ONLY valid JSON matching this schema:
   "updatePatientState": {}
 }
 Rules:
-- Choose the next uncovered asthma control topic from: nighttime_symptoms, reliever_use, activity_limitation.
+- Choose the next uncovered asthma control topic from: ${availableTopics}.
 - If all topics are covered or budget is exhausted, use type "end_session".
 - Do not diagnose or give treatment advice.
 - ${styleInstruction}`;
@@ -144,7 +148,7 @@ Current intent: ${input.conversationContext.currentIntent}`;
 
   // Validate that the LLM chose a known uncovered topic
   if (parsed.nextAction.type === "ask") {
-    const question = getCheckInQuestion(parsed.nextAction.topic);
+    const question = getCheckInQuestion(parsed.nextAction.topic, input.patientContext.medications);
     if (!question || askedTopics.has(parsed.nextAction.topic)) {
       throw new Error("LLM chose invalid or already asked topic");
     }

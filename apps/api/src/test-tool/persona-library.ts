@@ -1,5 +1,6 @@
 import type { Clock } from "../plugins/clock.js";
 import type { PrismaClient } from "@carememory/db";
+import type { MedicationBaseline } from "@carememory/engine";
 
 export interface Persona {
   id: string;
@@ -10,6 +11,7 @@ export interface Persona {
     timezone: string;
     locale: string;
     nextVisitDays?: number;
+    medications?: MedicationBaseline;
   };
   cycle: {
     status: "ONBOARDING" | "ACTIVE";
@@ -24,6 +26,19 @@ const personas: Persona[] = [
     name: "Controlled asthma",
     description: "Control is good, regular preventer, no night symptoms.",
     user: { nickname: "Sarah", timezone: "Europe/London", locale: "en-GB", nextVisitDays: 30 },
+    cycle: { status: "ACTIVE", nextCheckinOffset: "tomorrow_10am" },
+  },
+  {
+    id: "controlled_asthma_with_controller",
+    name: "Controlled asthma with controller",
+    description: "Control is good and takes a daily controller inhaler; check-in should include adherence question.",
+    user: {
+      nickname: "Sarah",
+      timezone: "Europe/London",
+      locale: "en-GB",
+      nextVisitDays: 30,
+      medications: { baseline: [{ name: "Seretide", type: "controller" }] },
+    },
     cycle: { status: "ACTIVE", nextCheckinOffset: "tomorrow_10am" },
   },
   {
@@ -109,6 +124,7 @@ export async function loadPersona(
       timezone: persona.user.timezone,
       locale: persona.user.locale,
       nextVisitAt,
+      medications: persona.user.medications as any,
     },
   });
 

@@ -73,7 +73,8 @@ Rules:
 3. NEVER change the language of the message.
 4. Keep the message concise (ideally under 300 characters) and suitable for WhatsApp.
 5. Do not add sign-offs like "CareMemory Team" unless already present.
-6. Return ONLY the polished message text, with no quotes, no markdown, and no extra commentary.`;
+6. Preserve the capitalization of the pronoun "I".
+7. Return ONLY the polished message text, with no quotes, no markdown, and no extra commentary.`;
 
   const localeHint = options.locale ? `The message should remain in ${options.locale.code}.` : "";
   const userPrompt = `Intent: ${options.intent ?? "inform"}\n${localeHint}\nMessage:\n${text}`;

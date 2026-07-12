@@ -4,6 +4,7 @@ import type { PrismaClient, ObservationCategory } from "@carememory/db";
 import type { LLMClient, LLMConfig } from "./llm.js";
 import type { QuotaStore } from "./llm-quota.js";
 import type { TemplateResolver } from "./dialogue.js";
+import type { MedicationBaseline } from "./question-bank.js";
 
 export type LlmModelType = "perception" | "planner" | "dialogue" | "safety";
 
@@ -80,6 +81,7 @@ export interface PlannerInput {
     recentObservations: Observation[];
     openIssues: string[];
     upcomingVisitDays?: number;
+    medications?: MedicationBaseline;
   };
   conversationContext: {
     currentIntent: string;

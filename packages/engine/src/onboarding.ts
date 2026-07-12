@@ -46,12 +46,56 @@ function parseNextVisit(text: string, now: Date): Date | null {
   return null;
 }
 
-function parseMedications(text: string): { baseline: Array<{ name: string; type: string }> } | null {
+export function classifyMedicationType(name: string): "controller" | "reliever" | "unspecified" {
+  const lower = name.toLowerCase();
+  const controllerKeywords = [
+    "controller",
+    "preventer",
+    "seretide",
+    "symbicort",
+    "flixotide",
+    "fluticasone",
+    "budesonide",
+    "beclometasone",
+    "beclomethasone",
+    "mometasone",
+    "ciclesonide",
+    "qvar",
+    "clenil",
+    "fostair",
+    "pulmicort",
+  ];
+  const relieverKeywords = [
+    "reliever",
+    "ventolin",
+    "salbutamol",
+    "albuterol",
+    "bricanyl",
+    "terbutaline",
+  ];
+  const isController = controllerKeywords.some((k) => lower.includes(k));
+  const isReliever = relieverKeywords.some((k) => lower.includes(k));
+  if (isController && !isReliever) return "controller";
+  if (isReliever && !isController) return "reliever";
+  return "unspecified";
+}
+
+export function parseMedications(text: string): { baseline: Array<{ name: string; type: "controller" | "reliever" | "unspecified" }> } | null {
   if (isSkip(text)) return { baseline: [] };
   const parts = text.split(/[,;/]\s*/).map((s) => s.trim()).filter(Boolean);
   if (parts.length === 0) return null;
   return {
-    baseline: parts.map((name) => ({ name, type: "unspecified" })),
+    baseline: parts.map((part) => {
+      // Accept "Name (type)" or "Name - type"
+      const explicitTypeMatch = part.match(/^(.+?)\s*[\(\-:]\s*(controller|reliever|preventer)\s*\)?$/i);
+      if (explicitTypeMatch) {
+        const name = explicitTypeMatch[1].trim();
+        const rawType = explicitTypeMatch[2].toLowerCase();
+        const type = rawType === "preventer" ? "controller" : (rawType as "controller" | "reliever");
+        return { name, type };
+      }
+      return { name: part, type: classifyMedicationType(part) };
+    }),
   };
 }
 
@@ -172,7 +216,7 @@ export function askNext(userId: string, user: OnboardingUser): OnboardingResult 
       messages: [
         buildMessage(
           userId,
-          "What asthma medications do you use regularly? E.g. Seretide (controller), Ventolin (reliever). Reply with names separated by commas, or SKIP."
+          "What asthma medications do you use regularly? E.g. Seretide (controller), Ventolin (reliever). You can also write 'Name - controller/reliever'. Reply with names separated by commas, or SKIP."
         ),
       ],
       finalised: false,

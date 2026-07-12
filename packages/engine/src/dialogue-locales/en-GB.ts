@@ -6,6 +6,7 @@ export const enGB: DialogueLocale = {
     nighttime_symptoms: ["None", "Mild", "Disturbed sleep", "Woke me up"],
     reliever_use: ["0 times", "1 time", "2 times", "3+ times"],
     activity_limitation: ["No limitation", "Yes, limited"],
+    controller_adherence: ["Yes", "No", "Skip"],
   },
   optionSynonyms: {
     night_none: ["none", "no symptoms", "didn't wake", "slept fine"],
@@ -18,6 +19,9 @@ export const enGB: DialogueLocale = {
     reliever_3_plus: ["3", "3+", "three or more", "several times", "a lot"],
     activity_no: ["no", "not limited", "no limitation", "fine"],
     activity_yes: ["yes", "limited", "couldn't exercise", "struggled"],
+    adherence_yes: ["yes", "took it", "used it", "as prescribed", "every day"],
+    adherence_no: ["no", "missed", "forgot", "didn't take", "didn't use"],
+    adherence_skip: ["skip", "not applicable", "na", "none"],
   },
   scaleWordMap: {
     1: ["none", "mild", "good"],

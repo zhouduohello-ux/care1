@@ -23,9 +23,9 @@
       "afterStep": 4,
       "type": "message",
       "op": "contains",
-      "value": "night",
+      "value": "asthma",
       "caseInsensitive": true,
-      "description": "Reprompt retains the original nighttime symptoms topic"
+      "description": "Reprompt retains the original asthma check-in context"
     }
   ]
 }

@@ -14,7 +14,11 @@ export interface QuestionDefinition {
   budgetCost: number;
 }
 
-export const CHECKIN_QUESTIONS: readonly QuestionDefinition[] = [
+export interface MedicationBaseline {
+  baseline: Array<{ name: string; type: "controller" | "reliever" | "unspecified" }>;
+}
+
+export const CORE_CHECKIN_QUESTIONS: readonly QuestionDefinition[] = [
   {
     topic: "nighttime_symptoms",
     purpose: "Track nighttime cough or wheeze over the past 2 days.",
@@ -60,10 +64,33 @@ export const EXCEPTION_QUESTIONS: readonly QuestionDefinition[] = [
   },
 ] as const;
 
-export type CheckInTopic = (typeof CHECKIN_QUESTIONS)[number]["topic"];
+/** Kept for backwards compatibility; prefer {@link buildCheckInQuestions}. */
+export const CHECKIN_QUESTIONS: readonly QuestionDefinition[] = CORE_CHECKIN_QUESTIONS;
 
-export function getCheckInQuestion(topic: string): QuestionDefinition | undefined {
-  return CHECKIN_QUESTIONS.find((q) => q.topic === topic);
+export function buildCheckInQuestions(medications?: MedicationBaseline | null): QuestionDefinition[] {
+  const controllers = medications?.baseline.filter((m) => m.type === "controller").map((m) => m.name) ?? [];
+  const questions: QuestionDefinition[] = [...CORE_CHECKIN_QUESTIONS];
+  if (controllers.length > 0) {
+    const names = controllers.join(" / ");
+    questions.push({
+      topic: "controller_adherence",
+      purpose: `Have you used your ${names} as prescribed in the last 2 days?`,
+      expectedResponseType: "single_choice",
+      options: ["adherence_yes", "adherence_no", "adherence_skip"],
+      budgetCost: 1,
+    });
+  }
+  return questions;
+}
+
+export function hasControllerMedication(medications?: MedicationBaseline | null): boolean {
+  return medications?.baseline.some((m) => m.type === "controller") ?? false;
+}
+
+export type CheckInTopic = (typeof CORE_CHECKIN_QUESTIONS)[number]["topic"] | "controller_adherence";
+
+export function getCheckInQuestion(topic: string, medications?: MedicationBaseline | null): QuestionDefinition | undefined {
+  return buildCheckInQuestions(medications).find((q) => q.topic === topic);
 }
 
 export function getExceptionQuestion(index: number): QuestionDefinition | undefined {

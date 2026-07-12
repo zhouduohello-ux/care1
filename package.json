@@ -28,6 +28,7 @@
     "test:e2e:pending-timeout": "tsx tests/scenarios/run-scenario.ts tests/scenarios/pending-question-timeout.json",
     "test:e2e:turn-manager-max": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-max-reprompts.json",
     "test:e2e:turn-timeline": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-timeline.json",
+    "test:e2e:medication": "tsx tests/scenarios/run-scenario.ts tests/scenarios/medication-adherence.json",
     "test:e2e:staging": "tsx tests/scenarios/run-all.ts",
     "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
     "typecheck": "turbo run typecheck"

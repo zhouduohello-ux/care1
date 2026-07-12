@@ -227,6 +227,7 @@ describe("perceive — button replies", () => {
     { id: "activity_yes", concept: "activity_limitation", value: "yes" },
     { id: "adherence_yes", concept: "controller_adherence", value: "yes" },
     { id: "adherence_no", concept: "controller_adherence", value: "no" },
+    { id: "adherence_skip", concept: "controller_adherence", value: "skip" },
     { id: "trigger_pollen", concept: "exposure", value: "pollen" },
     { id: "trigger_dust", concept: "exposure", value: "dust" },
     { id: "trigger_cold", concept: "exposure", value: "cold_air" },
@@ -1140,7 +1141,7 @@ describe("DEFAULT_BUTTON_MAP", () => {
   });
 
   it("has exactly 16 entries", () => {
-    expect(Object.keys(DEFAULT_BUTTON_MAP)).toHaveLength(16);
+    expect(Object.keys(DEFAULT_BUTTON_MAP)).toHaveLength(17);
   });
 
   const expectedButtons: Array<{ id: string; category: string; concept: string; value: unknown }> = [
