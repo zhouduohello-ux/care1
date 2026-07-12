@@ -32,7 +32,9 @@ import {
   getMaxReprompts,
   getLlmAnswerRelevanceThreshold,
   getSessionTurnBudget,
-  MAX_REPROMPTS,
+  detectTopicShift,
+  buildTopicShiftAcknowledgementMessage,
+  recordTopicShift,
   type PendingQuestion,
   type AnswerConfidenceResult,
 } from "./turn-manager.js";
@@ -1098,74 +1100,113 @@ export async function processInbound(
               }
             }
 
-            // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
-            // accept it and move on instead of reprompting. The LLM must meet a configurable confidence threshold.
-            const dialogueLlmClient = resolveLlmClient(context, "dialogue");
-            let acceptedByLlm = false;
-            if (allowLlm && dialogueLlmClient) {
-              const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
-              const threshold = getLlmAnswerRelevanceThreshold();
-              if (relevance.isAnswer && relevance.confidence >= threshold) {
-                await saveObservations(
-                  prisma,
-                  user.id,
-                  cycle.id,
-                  inboundEventId,
-                  [
-                    {
-                      category: "subjective",
-                      concept: pending.topic,
-                      value: message.content.text ?? "yes",
-                      confidence: relevance.confidence,
-                      extractedBy: "llm",
-                      attributes: { matchMethod: "llm", llmReasoning: relevance.reasoning },
-                    },
-                  ],
-                  context.now
-                );
-                await clearPendingQuestion(prisma, activeCheckIn.id);
-                acceptedByLlm = true;
-              } else if (relevance.isAnswer) {
-                // LLM thought it was an answer but confidence was below threshold: log for analysis but still reprompt.
-                await prisma.event.create({
-                  data: {
-                    userId: user.id,
-                    cycleId: cycle.id,
-                    checkInId: activeCheckIn.id,
-                    type: "turn_reprompt" as const,
-                    payload: {
-                      topic: pending.topic,
-                      action: "llm_rejected_low_confidence",
-                      confidence: relevance.confidence,
-                      threshold,
-                      reasoning: relevance.reasoning,
-                    } as unknown as Prisma.InputJsonValue,
-                    timestamp: context.now,
-                    traceId: perception.traceId,
-                  },
-                });
-              }
-            }
-
-            if (!acceptedByLlm) {
-              const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
-              const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
-              await recordReprompt(
+            // Topic shift: the user did not answer the pending question but
+            // introduced a new, relevant observation. Acknowledge it, record the
+            // pending question as no_answer, and let L4 Planner continue with the
+            // new context instead of reprompting.
+            const topicShift = detectTopicShift(perception, pending, answerEvaluation);
+            if (topicShift.isTopicShift) {
+              await recordTopicShift(
                 prisma,
                 user.id,
                 cycle.id,
                 activeCheckIn.id,
                 pending,
-                nextRepromptCount,
-                classifyNonAnswer(perception),
+                topicShift.shiftedObservations,
+                inboundEventId,
                 context.now,
                 perception.traceId
               );
-              return {
-                messages,
-                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-              };
+
+              const acknowledgement = await buildTopicShiftAcknowledgementMessage(
+                userId,
+                pending,
+                topicShift.shiftedObservations,
+                renderOptions
+              );
+              const { messages: ackMessages } = safetyWrapWithSummary(userId, [acknowledgement]);
+              await saveOutboundMessages(
+                prisma,
+                user.id,
+                ackMessages,
+                cycle.id,
+                new Date(),
+                inboundEventId,
+                perception.traceId,
+                activeCheckIn.id
+              );
+              preOutboundMessages = ackMessages;
+              // Fall through to L4 Planner so it can ask the next question.
+            } else {
+              // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
+              // accept it and move on instead of reprompting. The LLM must meet a configurable confidence threshold.
+              const dialogueLlmClient = resolveLlmClient(context, "dialogue");
+              let acceptedByLlm = false;
+              if (allowLlm && dialogueLlmClient) {
+                const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
+                const threshold = getLlmAnswerRelevanceThreshold();
+                if (relevance.isAnswer && relevance.confidence >= threshold) {
+                  await saveObservations(
+                    prisma,
+                    user.id,
+                    cycle.id,
+                    inboundEventId,
+                    [
+                      {
+                        category: "subjective",
+                        concept: pending.topic,
+                        value: message.content.text ?? "yes",
+                        confidence: relevance.confidence,
+                        extractedBy: "llm",
+                        attributes: { matchMethod: "llm", llmReasoning: relevance.reasoning },
+                      },
+                    ],
+                    context.now
+                  );
+                  await clearPendingQuestion(prisma, activeCheckIn.id);
+                  acceptedByLlm = true;
+                } else if (relevance.isAnswer) {
+                  // LLM thought it was an answer but confidence was below threshold: log for analysis but still reprompt.
+                  await prisma.event.create({
+                    data: {
+                      userId: user.id,
+                      cycleId: cycle.id,
+                      checkInId: activeCheckIn.id,
+                      type: "turn_reprompt" as const,
+                      payload: {
+                        topic: pending.topic,
+                        action: "llm_rejected_low_confidence",
+                        confidence: relevance.confidence,
+                        threshold,
+                        reasoning: relevance.reasoning,
+                      } as unknown as Prisma.InputJsonValue,
+                      timestamp: context.now,
+                      traceId: perception.traceId,
+                    },
+                  });
+                }
+              }
+
+              if (!acceptedByLlm) {
+                const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
+                const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+                await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
+                await recordReprompt(
+                  prisma,
+                  user.id,
+                  cycle.id,
+                  activeCheckIn.id,
+                  pending,
+                  nextRepromptCount,
+                  classifyNonAnswer(perception),
+                  context.now,
+                  perception.traceId
+                );
+                return {
+                  messages,
+                  trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+                };
+              }
             }
           }
         }
