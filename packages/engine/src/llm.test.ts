@@ -147,4 +147,83 @@ describe("LLM client", () => {
       extractedBy: "rule",
     });
   });
+
+  it("retries retryable errors with exponential backoff", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("fetch failed"))
+      .mockRejectedValueOnce(new Error("503 Service Unavailable"))
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: "Hello" } }] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createOpenAIClient({
+      apiKey: "sk-test",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      maxRetries: 2,
+      retryBaseDelayMs: 10,
+    });
+
+    const { content } = await client.complete([{ role: "user", content: "Hi" }]);
+    expect(content).toBe("Hello");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("falls back to fallback model after primary retries are exhausted", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("429 Rate limited"))
+      .mockRejectedValueOnce(new Error("429 Rate limited"))
+      .mockResolvedValue({
+        ok: true,
+        json: async () => ({ choices: [{ message: { content: "Hello from fallback" } }] }),
+      });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const client = createOpenAIClient({
+      apiKey: "sk-test",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      fallbackModel: "fallback-model",
+      maxRetries: 1,
+      retryBaseDelayMs: 10,
+    });
+
+    const { content } = await client.complete([{ role: "user", content: "Hi" }]);
+    expect(content).toBe("Hello from fallback");
+    const lastCallBody = JSON.parse(fetchMock.mock.calls[fetchMock.mock.calls.length - 1][1].body);
+    expect(lastCallBody.model).toBe("fallback-model");
+  });
+
+  it("throws LlmTimeoutError when request exceeds timeout", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+        return new Promise((_resolve, reject) => {
+          const timer = setTimeout(() => reject(new Error("should not reach")), 1000);
+          if (init?.signal) {
+            init.signal.addEventListener("abort", () => {
+              clearTimeout(timer);
+              const abortError = new Error("AbortError");
+              abortError.name = "AbortError";
+              reject(abortError);
+            });
+          }
+        });
+      })
+    );
+
+    const client = createOpenAIClient({
+      apiKey: "sk-test",
+      baseUrl: "https://api.openai.com/v1",
+      model: "gpt-4o-mini",
+      timeoutMs: 50,
+      maxRetries: 0,
+    });
+
+    await expect(client.complete([{ role: "user", content: "Hi" }])).rejects.toThrow("timed out");
+  });
 });
