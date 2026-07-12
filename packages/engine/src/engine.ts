@@ -22,6 +22,8 @@ import {
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
+  detectPartialMultiSelectAnswer,
+  buildPartialAnswerFollowUpMessage,
   classifyNonAnswer,
   recordReprompt,
   clearPendingQuestion,
@@ -853,35 +855,6 @@ export async function processInbound(
         );
         await clearPendingQuestion(prisma, activeCheckIn.id);
       } else {
-        // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
-        // accept it and move on instead of reprompting.
-        const dialogueLlmClient = resolveLlmClient(context, "dialogue");
-        let acceptedByLlm = false;
-        if (allowLlm && dialogueLlmClient) {
-          const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
-          if (relevance.isAnswer) {
-            await saveObservations(
-              prisma,
-              user.id,
-              cycle.id,
-              inboundEventId,
-              [
-                {
-                  category: "subjective",
-                  concept: pending.topic,
-                  value: message.content.text ?? "yes",
-                  confidence: 0.8,
-                  extractedBy: "llm",
-                },
-              ],
-              context.now
-            );
-            await clearPendingQuestion(prisma, activeCheckIn.id);
-            acceptedByLlm = true;
-          }
-        }
-
-        if (!acceptedByLlm) {
           const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
           const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
           const renderOptions = {
@@ -942,27 +915,128 @@ export async function processInbound(
             // No history to go back to: fall through to L4 Planner, which will
             // re-ask the current question.
           } else {
-            const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
-            const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-            await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
-            await recordReprompt(
-              prisma,
-              user.id,
-              cycle.id,
-              activeCheckIn.id,
-              pending,
-              nextRepromptCount,
-              classifyNonAnswer(perception),
-              context.now,
-              perception.traceId
-            );
-            return {
-              messages,
-              trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-            };
+            // Partial answer detection for multi_select: if the user named at
+            // least one valid option but also included unknown meaningful words,
+            // accept the valid options and ask them to clarify the rest. This
+            // avoids treating a partially valid reply as a complete miss.
+            if (pending.expectedResponseType === "multi_select") {
+              const partial = detectPartialMultiSelectAnswer(message, pending, user.locale);
+              if (partial.isPartial) {
+                await saveObservations(
+                  prisma,
+                  user.id,
+                  cycle.id,
+                  inboundEventId,
+                  partial.extracted.matched.map((optionId) => ({
+                    category: "subjective" as const,
+                    concept: pending.topic,
+                    value: optionId,
+                    confidence: 1,
+                    extractedBy: "rule" as const,
+                  })),
+                  context.now
+                );
+
+                const followUp = await buildPartialAnswerFollowUpMessage(
+                  userId,
+                  pending,
+                  partial.extracted.matched,
+                  partial.extracted.unmatched,
+                  renderOptions
+                );
+
+                // Replace the pending question with a text follow-up so the
+                // next reply is accepted as clarification.
+                const followUpPending: PendingQuestion = {
+                  topic: pending.topic,
+                  purpose: followUp.content.text,
+                  expectedResponseType: "text",
+                  askedAt: new Date().toISOString(),
+                };
+                await prisma.checkIn.update({
+                  where: { id: activeCheckIn.id },
+                  data: {
+                    pendingQuestion: followUpPending as unknown as Prisma.InputJsonValue,
+                    repromptCount: 0,
+                  },
+                });
+
+                await prisma.event.create({
+                  data: {
+                    userId: user.id,
+                    cycleId: cycle.id,
+                    checkInId: activeCheckIn.id,
+                    type: "turn_reprompt" as const,
+                    payload: {
+                      topic: pending.topic,
+                      action: "partial_answer_follow_up",
+                      matched: partial.extracted.matched,
+                      unmatched: partial.extracted.unmatched,
+                    } as unknown as Prisma.InputJsonValue,
+                    timestamp: context.now,
+                    traceId: perception.traceId,
+                  },
+                });
+
+                const { messages, summary } = safetyWrapWithSummary(userId, [followUp]);
+                await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+                return {
+                  messages,
+                  trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+                };
+              }
+            }
+
+            // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
+            // accept it and move on instead of reprompting.
+            const dialogueLlmClient = resolveLlmClient(context, "dialogue");
+            let acceptedByLlm = false;
+            if (allowLlm && dialogueLlmClient) {
+              const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
+              if (relevance.isAnswer) {
+                await saveObservations(
+                  prisma,
+                  user.id,
+                  cycle.id,
+                  inboundEventId,
+                  [
+                    {
+                      category: "subjective",
+                      concept: pending.topic,
+                      value: message.content.text ?? "yes",
+                      confidence: 0.8,
+                      extractedBy: "llm",
+                    },
+                  ],
+                  context.now
+                );
+                await clearPendingQuestion(prisma, activeCheckIn.id);
+                acceptedByLlm = true;
+              }
+            }
+
+            if (!acceptedByLlm) {
+              const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
+              const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              await recordReprompt(
+                prisma,
+                user.id,
+                cycle.id,
+                activeCheckIn.id,
+                pending,
+                nextRepromptCount,
+                classifyNonAnswer(perception),
+                context.now,
+                perception.traceId
+              );
+              return {
+                messages,
+                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+              };
+            }
           }
         }
-      }
     }
   }
 

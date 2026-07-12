@@ -22,6 +22,9 @@ import {
   setPendingQuestion,
   getMaxReprompts,
   DEFAULT_MAX_REPROMPTS,
+  extractMultiSelectAnswers,
+  detectPartialMultiSelectAnswer,
+  buildPartialAnswerFollowUpMessage,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -137,17 +140,21 @@ describe("isAnswerToPendingQuestion", () => {
     expect(isAnswerToPendingQuestion(makeInbound({ text: "none" }), makePerception(), pending, "en-GB")).toBe(true);
   });
 
-  it("accepts multi_select by synonym and natural language", () => {
-    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
-    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen and exercise" }), makePerception(), pending, "en-GB")).toBe(true);
-    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen, dust" }), makePerception(), pending, "en-GB")).toBe(true);
-    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen and smoke" }), makePerception(), pending, "en-GB")).toBe(false);
-  });
-
   it("accepts multi_select when all tokens match options", () => {
     const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
     expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen, dust" }), makePerception(), pending)).toBe(true);
-    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen, smoke" }), makePerception(), pending)).toBe(false);
+  });
+
+  it("rejects multi_select when no tokens match any option", () => {
+    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "smoke and mirrors" }), makePerception(), pending)).toBe(false);
+  });
+
+  it("rejects multi_select when some tokens match but unknown meaningful words remain", () => {
+    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+    // "smoke" is not in the option list, so this is treated as a partial answer
+    // rather than a full answer.
+    expect(isAnswerToPendingQuestion(makeInbound({ text: "pollen and smoke" }), makePerception(), pending, "en-GB")).toBe(false);
   });
 
   it("replies asking their own question are not answers", () => {
@@ -580,5 +587,103 @@ describe("buildPreviousQuestionMessage", () => {
     expect(message.content.type).toBe("list");
     expect(message.content.text).toContain("Going back");
     expect(message.content.text).toContain("Track nighttime cough or wheeze");
+  });
+});
+
+describe("extractMultiSelectAnswers", () => {
+  const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+
+  it("matches option ids and ignores stop words", () => {
+    const result = extractMultiSelectAnswers("I had pollen and dust", pending.options, "en-GB");
+    expect(result.matched).toEqual(["pollen", "dust"]);
+    expect(result.hasMeaningfulUnmatched).toBe(false);
+  });
+
+  it("matches synonyms from locale", () => {
+    const result = extractMultiSelectAnswers("none and once", ["reliever_0", "reliever_1", "reliever_2"], "en-GB");
+    expect(result.matched).toContain("reliever_0");
+    expect(result.matched).toContain("reliever_1");
+    expect(result.hasMeaningfulUnmatched).toBe(false);
+  });
+
+  it("returns unmatched meaningful tokens", () => {
+    const result = extractMultiSelectAnswers("pollen and smoke", pending.options, "en-GB");
+    expect(result.matched).toEqual(["pollen"]);
+    expect(result.unmatched).toContain("smoke");
+    expect(result.hasMeaningfulUnmatched).toBe(true);
+  });
+
+  it("returns empty when nothing matches", () => {
+    const result = extractMultiSelectAnswers("smoke and mirrors", pending.options, "en-GB");
+    expect(result.matched).toEqual([]);
+    expect(result.hasMeaningfulUnmatched).toBe(true);
+  });
+
+  it("handles comma and 'or' separators", () => {
+    const result = extractMultiSelectAnswers("pollen, dust or exercise", pending.options, "en-GB");
+    expect(result.matched).toEqual(["pollen", "dust", "exercise"]);
+    expect(result.hasMeaningfulUnmatched).toBe(false);
+  });
+});
+
+describe("detectPartialMultiSelectAnswer", () => {
+  const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+
+  it("detects partial answer when at least one option matches and unknown words remain", () => {
+    const message = makeInbound({ text: "pollen and smoke" });
+    const result = detectPartialMultiSelectAnswer(message, pending, "en-GB");
+    expect(result.isPartial).toBe(true);
+    expect(result.extracted.matched).toEqual(["pollen"]);
+    expect(result.extracted.unmatched).toContain("smoke");
+  });
+
+  it("does not detect partial answer when all tokens match", () => {
+    const message = makeInbound({ text: "pollen and dust" });
+    const result = detectPartialMultiSelectAnswer(message, pending, "en-GB");
+    expect(result.isPartial).toBe(false);
+    expect(result.extracted.matched).toEqual(["pollen", "dust"]);
+  });
+
+  it("does not detect partial answer when nothing matches", () => {
+    const message = makeInbound({ text: "smoke and mirrors" });
+    const result = detectPartialMultiSelectAnswer(message, pending, "en-GB");
+    expect(result.isPartial).toBe(false);
+    expect(result.extracted.matched).toEqual([]);
+  });
+});
+
+describe("buildPartialAnswerFollowUpMessage", () => {
+  it("acknowledges matched options and asks about unmatched tokens", async () => {
+    const pending = {
+      topic: "triggers",
+      purpose: "Have any of these triggered your asthma?",
+      expectedResponseType: "multi_select" as const,
+      options: ["pollen", "dust", "exercise"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildPartialAnswerFollowUpMessage("user_1", pending, ["pollen"], ["smoke"], {
+      style: "v1",
+      locale: "en-GB",
+    });
+    expect(message.content.type).toBe("text");
+    expect(message.content.text).toContain("Got it");
+    expect(message.content.text).toContain("pollen");
+    expect(message.content.text).toContain("smoke");
+  });
+
+  it("asks for more when there are no unmatched tokens", async () => {
+    const pending = {
+      topic: "triggers",
+      purpose: "Have any of these triggered your asthma?",
+      expectedResponseType: "multi_select" as const,
+      options: ["pollen", "dust", "exercise"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildPartialAnswerFollowUpMessage("user_1", pending, ["pollen"], [], {
+      style: "v1",
+      locale: "en-GB",
+    });
+    expect(message.content.type).toBe("text");
+    expect(message.content.text).toContain("anything else");
   });
 });
