@@ -381,12 +381,13 @@ LLM_TEMPERATURE_PLANNER=0.1
 
 ### 7.6 调度器 / Turn 管理配置
 
-pending question 的 gentle nudge、静默超时与重提示上限可通过环境变量调整：
+pending question 的 gentle nudge、静默超时、重提示上限与 LLM fallback 阈值可通过环境变量调整：
 
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `PENDING_QUESTION_NUDGE_AFTER_MS` | `43200000`（12h） | 发出 check-in 后多久发送 gentle nudge |
 | `PENDING_QUESTION_TIMEOUT_MS` | `86400000`（24h） | 发出 check-in 后多久未回复则记录 `no_answer` |
 | `PENDING_QUESTION_MAX_REPROMPTS` | `2` | 答非所问时最多重提示几次 |
+| `LLM_ANSWER_RELEVANCE_THRESHOLD` | `0.7` | Turn Manager LLM fallback 接受自然语言回复的最低置信度（0–1） |
 
 这些变量在 `apps/api/src/services/scheduler.ts` 与 `packages/engine/src/turn-manager.ts` 中读取，均带非法值回退。

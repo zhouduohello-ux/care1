@@ -6,6 +6,7 @@ import type { LLMClient } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
   isAnswerToPendingQuestion,
+  evaluateAnswerToPendingQuestion,
   isAnswerRelevantWithLlm,
   buildRepromptMessage,
   buildClarificationMessage,
@@ -21,6 +22,7 @@ import {
   clearPendingQuestion,
   setPendingQuestion,
   getMaxReprompts,
+  getLlmAnswerRelevanceThreshold,
   DEFAULT_MAX_REPROMPTS,
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
@@ -168,6 +170,69 @@ describe("isAnswerToPendingQuestion", () => {
       extractedObservations: [{ category: "function", concept: "activity_limitation", value: "yes", confidence: 1, extractedBy: "rule" }],
     });
     expect(isAnswerToPendingQuestion(makeInbound({ text: "I couldn't run today" }), perception, pending)).toBe(true);
+  });
+});
+
+describe("evaluateAnswerToPendingQuestion", () => {
+  it("scores exact button reply at 1.0", () => {
+    const pending = { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ type: "button_reply", buttonId: "activity_yes" }), makePerception(), pending);
+    expect(result.isAnswer).toBe(true);
+    expect(result.confidence).toBe(1);
+    expect(result.matchMethod).toBe("exact_option");
+  });
+
+  it("scores single_choice synonym match at 0.9", () => {
+    const pending = { topic: "nighttime_symptoms", purpose: "Night symptoms?", expectedResponseType: "single_choice" as const, options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "woke me up" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.confidence).toBe(0.9);
+    expect(result.matchMethod).toBe("synonym");
+  });
+
+  it("scores scale number at 1.0 and scale word at 0.9", () => {
+    const pending = { topic: "severity", purpose: "Rate severity.", expectedResponseType: "scale" as const, options: ["1", "2", "3", "4", "5"], askedAt: "" };
+    const num = evaluateAnswerToPendingQuestion(makeInbound({ text: "3" }), makePerception(), pending);
+    expect(num).toMatchObject({ isAnswer: true, confidence: 1, matchMethod: "scale_number" });
+    const word = evaluateAnswerToPendingQuestion(makeInbound({ text: "severe" }), makePerception(), pending, "en-GB");
+    expect(word).toMatchObject({ isAnswer: true, confidence: 0.9, matchMethod: "scale_word" });
+  });
+
+  it("scores text question with topic observation at 0.8", () => {
+    const pending = { topic: "exception_clarification", purpose: "Tell me more.", expectedResponseType: "text" as const, askedAt: "" };
+    const perception = makePerception({
+      extractedObservations: [{ category: "subjective", concept: "exception_clarification", value: "details", confidence: 1, extractedBy: "rule" }],
+    });
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "It was bad" }), perception, pending);
+    expect(result.isAnswer).toBe(true);
+    expect(result.confidence).toBe(0.8);
+    expect(result.matchMethod).toBe("text_observation");
+  });
+
+  it("scores text question without observation at 0.6", () => {
+    const pending = { topic: "exception_clarification", purpose: "Tell me more.", expectedResponseType: "text" as const, askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "It was bad" }), makePerception(), pending);
+    expect(result.isAnswer).toBe(true);
+    expect(result.confidence).toBe(0.6);
+    expect(result.matchMethod).toBe("text");
+  });
+
+  it("returns zero confidence for non-answer intents", () => {
+    const pending = { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+    const perception = makePerception({ intent: { primary: "question", confidence: 1 } });
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "Can I skip?" }), perception, pending);
+    expect(result.isAnswer).toBe(false);
+    expect(result.confidence).toBe(0);
+    expect(result.matchMethod).toBe("none");
+  });
+
+  it("scores partial multi_select between 0.4 and 0.9", () => {
+    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "pollen and smoke" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(false);
+    expect(result.confidence).toBeGreaterThanOrEqual(0.4);
+    expect(result.confidence).toBeLessThanOrEqual(0.9);
+    expect(result.matchMethod).toBe("partial");
   });
 });
 
@@ -349,31 +414,82 @@ function mockLlm(responseJson: string): LLMClient {
 describe("isAnswerRelevantWithLlm", () => {
   const pending = { topic: "activity_limitation", purpose: "Were you limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
 
-  it("returns true when LLM says the reply is an answer", async () => {
-    const client = mockLlm(JSON.stringify({ isAnswer: true, reasoning: "The user says they could not run." }));
+  it("returns true with confidence when LLM says the reply is an answer", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true, confidence: 0.85, reasoning: "The user says they could not run." }));
     const result = await isAnswerRelevantWithLlm(makeInbound({ text: "I couldn't run today" }), makePerception(), pending, client);
     expect(result.isAnswer).toBe(true);
+    expect(result.confidence).toBe(0.85);
     expect(client.complete).toHaveBeenCalledTimes(1);
   });
 
   it("returns false when LLM says the reply is not an answer", async () => {
-    const client = mockLlm(JSON.stringify({ isAnswer: false, reasoning: "The user asks a clarifying question." }));
+    const client = mockLlm(JSON.stringify({ isAnswer: false, confidence: 0.1, reasoning: "The user asks a clarifying question." }));
     const result = await isAnswerRelevantWithLlm(makeInbound({ text: "What do you mean?" }), makePerception(), pending, client);
     expect(result.isAnswer).toBe(false);
+    expect(result.confidence).toBe(0.1);
   });
 
   it("returns false on LLM failure / invalid JSON", async () => {
     const client = { modelName: "bad", complete: vi.fn().mockRejectedValue(new Error("timeout")) } as unknown as LLMClient;
     const result = await isAnswerRelevantWithLlm(makeInbound({ text: "whatever" }), makePerception(), pending, client);
     expect(result.isAnswer).toBe(false);
+    expect(result.confidence).toBe(0);
   });
 
   it("calls onLlmCall audit callback", async () => {
-    const client = mockLlm(JSON.stringify({ isAnswer: true }));
+    const client = mockLlm(JSON.stringify({ isAnswer: true, confidence: 0.9 }));
     const onLlmCall = vi.fn();
     await isAnswerRelevantWithLlm(makeInbound({ text: "yes" }), makePerception(), pending, client, onLlmCall);
     expect(onLlmCall).toHaveBeenCalledTimes(1);
     expect(onLlmCall).toHaveBeenCalledWith("mock-relevance", expect.any(Array), expect.any(String), expect.any(Object));
+  });
+
+  it("falls back to default confidence when LLM omits confidence", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true }));
+    const result = await isAnswerRelevantWithLlm(makeInbound({ text: "yes" }), makePerception(), pending, client);
+    expect(result.isAnswer).toBe(true);
+    expect(result.confidence).toBe(0.7);
+  });
+
+  it("clamps out-of-range confidence values", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true, confidence: 1.5 }));
+    const high = await isAnswerRelevantWithLlm(makeInbound({ text: "yes" }), makePerception(), pending, client);
+    expect(high.confidence).toBe(1);
+
+    const clientLow = mockLlm(JSON.stringify({ isAnswer: true, confidence: -0.3 }));
+    const low = await isAnswerRelevantWithLlm(makeInbound({ text: "yes" }), makePerception(), pending, clientLow);
+    expect(low.confidence).toBe(0);
+  });
+});
+
+describe("getLlmAnswerRelevanceThreshold", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+    delete process.env.LLM_ANSWER_RELEVANCE_THRESHOLD;
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("defaults to 0.7", () => {
+    expect(getLlmAnswerRelevanceThreshold()).toBe(0.7);
+  });
+
+  it("reads from LLM_ANSWER_RELEVANCE_THRESHOLD", () => {
+    process.env.LLM_ANSWER_RELEVANCE_THRESHOLD = "0.85";
+    expect(getLlmAnswerRelevanceThreshold()).toBe(0.85);
+  });
+
+  it("falls back for invalid values", () => {
+    process.env.LLM_ANSWER_RELEVANCE_THRESHOLD = "not-a-number";
+    expect(getLlmAnswerRelevanceThreshold()).toBe(0.7);
+    process.env.LLM_ANSWER_RELEVANCE_THRESHOLD = "1.5";
+    expect(getLlmAnswerRelevanceThreshold()).toBe(0.7);
+    process.env.LLM_ANSWER_RELEVANCE_THRESHOLD = "-0.1";
+    expect(getLlmAnswerRelevanceThreshold()).toBe(0.7);
   });
 });
 

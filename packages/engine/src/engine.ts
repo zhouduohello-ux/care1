@@ -12,6 +12,7 @@ import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
   getTurnState,
+  evaluateAnswerToPendingQuestion,
   isAnswerToPendingQuestion,
   isAnswerRelevantWithLlm,
   buildRepromptMessage,
@@ -29,6 +30,7 @@ import {
   clearPendingQuestion,
   setPendingQuestion,
   getMaxReprompts,
+  getLlmAnswerRelevanceThreshold,
   MAX_REPROMPTS,
   type PendingQuestion,
 } from "./turn-manager.js";
@@ -832,7 +834,10 @@ export async function processInbound(
   let preOutboundMessages: OutboundMessage[] = [];
   if (activeCheckIn) {
     const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
-    if (pending && !isAnswerToPendingQuestion(message, perception, pending, user.locale)) {
+    const answerEvaluation = pending
+      ? evaluateAnswerToPendingQuestion(message, perception, pending, user.locale)
+      : undefined;
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer) {
       const nextRepromptCount = repromptCount + 1;
 
       if (nextRepromptCount > getMaxReprompts()) {
@@ -850,6 +855,7 @@ export async function processInbound(
               value: "no_answer",
               confidence: 1,
               extractedBy: "rule",
+              attributes: { reason: "max_reprompts_exceeded" },
             },
           ],
           context.now
@@ -891,6 +897,7 @@ export async function processInbound(
                     value: "no_answer" as Prisma.InputJsonValue,
                     confidence: 1,
                     extractedBy: "rule" as const,
+                    attributes: { reason: "max_clarifications_exceeded" },
                   },
                 ],
                 context.now
@@ -996,8 +1003,9 @@ export async function processInbound(
                     category: "subjective" as const,
                     concept: pending.topic,
                     value: optionId,
-                    confidence: 1,
+                    confidence: Math.max(0.5, Math.min(0.95, partial.extracted.matched.length / (partial.extracted.matched.length + 1))),
                     extractedBy: "rule" as const,
+                    attributes: { matchMethod: "partial" },
                   })),
                   context.now
                 );
@@ -1053,12 +1061,13 @@ export async function processInbound(
             }
 
             // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
-            // accept it and move on instead of reprompting.
+            // accept it and move on instead of reprompting. The LLM must meet a configurable confidence threshold.
             const dialogueLlmClient = resolveLlmClient(context, "dialogue");
             let acceptedByLlm = false;
             if (allowLlm && dialogueLlmClient) {
               const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
-              if (relevance.isAnswer) {
+              const threshold = getLlmAnswerRelevanceThreshold();
+              if (relevance.isAnswer && relevance.confidence >= threshold) {
                 await saveObservations(
                   prisma,
                   user.id,
@@ -1069,14 +1078,34 @@ export async function processInbound(
                       category: "subjective",
                       concept: pending.topic,
                       value: message.content.text ?? "yes",
-                      confidence: 0.8,
+                      confidence: relevance.confidence,
                       extractedBy: "llm",
+                      attributes: { matchMethod: "llm", llmReasoning: relevance.reasoning },
                     },
                   ],
                   context.now
                 );
                 await clearPendingQuestion(prisma, activeCheckIn.id);
                 acceptedByLlm = true;
+              } else if (relevance.isAnswer) {
+                // LLM thought it was an answer but confidence was below threshold: log for analysis but still reprompt.
+                await prisma.event.create({
+                  data: {
+                    userId: user.id,
+                    cycleId: cycle.id,
+                    checkInId: activeCheckIn.id,
+                    type: "turn_reprompt" as const,
+                    payload: {
+                      topic: pending.topic,
+                      action: "llm_rejected_low_confidence",
+                      confidence: relevance.confidence,
+                      threshold,
+                      reasoning: relevance.reasoning,
+                    } as unknown as Prisma.InputJsonValue,
+                    timestamp: context.now,
+                    traceId: perception.traceId,
+                  },
+                });
               }
             }
 
@@ -1102,6 +1131,22 @@ export async function processInbound(
             }
           }
         }
+    } else if (pending && answerEvaluation?.isAnswer) {
+      // The user answered the pending question. Capture the match quality on the
+      // inbound event for analytics, but do not rewrite perception observations here.
+      await prisma.event.update({
+        where: { id: inboundEventId },
+        data: {
+          payload: {
+            ...perception,
+            turnManager: {
+              pendingTopic: pending.topic,
+              matchConfidence: answerEvaluation.confidence,
+              matchMethod: answerEvaluation.matchMethod,
+            },
+          } as unknown as Prisma.InputJsonValue,
+        },
+      });
     }
   }
 
