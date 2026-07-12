@@ -29,6 +29,10 @@ import {
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
+  detectTopicShift,
+  deferPendingQuestion,
+  popDeferredQuestion,
+  buildDeferredQuestionMessage,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -889,5 +893,126 @@ describe("getSessionTurnBudget", () => {
     expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
     process.env.SESSION_TURN_BUDGET = "1.5";
     expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
+  });
+});
+
+describe("detectTopicShift", () => {
+  const pending = { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0", "reliever_1"], askedAt: "" };
+
+  it("returns false when the user answers the pending topic", () => {
+    const perception = makePerception({
+      extractedObservations: [{ category: "medication", concept: "reliever_use", value: "reliever_1", confidence: 1, extractedBy: "rule" }],
+    });
+    const result = detectTopicShift(makeInbound({ text: "once" }), perception, pending);
+    expect(result.isShift).toBe(false);
+  });
+
+  it("returns true when the user provides an observation for a different topic", () => {
+    const perception = makePerception({
+      extractedObservations: [{ category: "symptom", concept: "nighttime_symptoms", value: "night_mild", confidence: 1, extractedBy: "rule" }],
+    });
+    const result = detectTopicShift(makeInbound({ text: "I had a mild cough at night" }), perception, pending);
+    expect(result.isShift).toBe(true);
+    expect(result.shiftedToTopic).toBe("nighttime_symptoms");
+    expect(result.shiftedToObservations).toHaveLength(1);
+  });
+
+  it("returns false for system-command intents such as skip or help", () => {
+    const perception = makePerception({
+      intent: { primary: "help", confidence: 1 },
+      extractedObservations: [{ category: "symptom", concept: "nighttime_symptoms", value: "night_mild", confidence: 1, extractedBy: "rule" }],
+    });
+    const result = detectTopicShift(makeInbound({ text: "help" }), perception, pending);
+    expect(result.isShift).toBe(false);
+  });
+
+  it("returns false when no observations are extracted", () => {
+    const perception = makePerception({ rawText: "something random" });
+    const result = detectTopicShift(makeInbound({ text: "something random" }), perception, pending);
+    expect(result.isShift).toBe(false);
+  });
+});
+
+describe("deferPendingQuestion", () => {
+  it("appends the pending question to deferredQuestions and clears pending", async () => {
+    const pending = { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: [] }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await deferPendingQuestion(prisma, "checkin_1", pending);
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toBe("reliever_use");
+    expect(result[0].deferredAt).toBeDefined();
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          pendingQuestion: Prisma.JsonNull,
+          repromptCount: 0,
+        }),
+      })
+    );
+  });
+});
+
+describe("popDeferredQuestion", () => {
+  it("returns undefined when there are no deferred questions", async () => {
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: [] }),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popDeferredQuestion(prisma, "checkin_1");
+    expect(result).toBeUndefined();
+  });
+
+  it("pops the oldest deferred question and sets it as pending", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+      { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no"], askedAt: "", deferredAt: "2026-01-01T00:00:01.000Z" },
+    ];
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popDeferredQuestion(prisma, "checkin_1");
+    expect(result?.topic).toBe("reliever_use");
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          pendingQuestion: deferred[0],
+          deferredQuestions: [deferred[1]],
+          repromptCount: 0,
+        }),
+      })
+    );
+  });
+});
+
+describe("buildDeferredQuestionMessage", () => {
+  it("renders a deferred question with a 'Before we finish' prefix", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: "",
+    };
+    const message = await buildDeferredQuestionMessage("user_1", pending, { style: "v1", locale: "en-GB" });
+    expect(message.content.type).toBe("buttons");
+    expect(message.content.text).toContain("Before we finish");
+    expect(message.content.text).toContain(pending.purpose);
   });
 });

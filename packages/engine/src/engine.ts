@@ -33,6 +33,10 @@ import {
   getLlmAnswerRelevanceThreshold,
   getSessionTurnBudget,
   MAX_REPROMPTS,
+  detectTopicShift,
+  deferPendingQuestion,
+  popDeferredQuestion,
+  buildDeferredQuestionMessage,
   type PendingQuestion,
   type AnswerConfidenceResult,
 } from "./turn-manager.js";
@@ -853,12 +857,41 @@ export async function processInbound(
 
   // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
   let preOutboundMessages: OutboundMessage[] = [];
+  let topicShiftHandled = false;
   if (activeCheckIn) {
     const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
     const answerEvaluation = pending
       ? evaluateAnswerToPendingQuestion(message, perception, pending, user.locale)
       : undefined;
+
+    // Topic-shift detection: if the user volunteered info about a different
+    // topic instead of answering the pending question, defer the pending
+    // question and let L4 Planner handle the new observation.
     if (pending && answerEvaluation && !answerEvaluation.isAnswer) {
+      const topicShift = detectTopicShift(message, perception, pending);
+      if (topicShift.isShift) {
+        await deferPendingQuestion(prisma, activeCheckIn.id, pending);
+        await prisma.event.create({
+          data: {
+            userId: user.id,
+            cycleId: cycle.id,
+            checkInId: activeCheckIn.id,
+            type: "user_action" as const,
+            payload: {
+              action: "topic_shift",
+              fromTopic: pending.topic,
+              toTopic: topicShift.shiftedToTopic,
+              toObservations: topicShift.shiftedToObservations?.map((o) => o.concept),
+            } as unknown as Prisma.InputJsonValue,
+            timestamp: context.now,
+            traceId: perception.traceId,
+          },
+        });
+        topicShiftHandled = true;
+      }
+    }
+
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer && !topicShiftHandled) {
       const nextRepromptCount = repromptCount + 1;
 
       if (nextRepromptCount > getMaxReprompts()) {
@@ -1169,7 +1202,7 @@ export async function processInbound(
             }
           }
         }
-    } else if (pending && answerEvaluation?.isAnswer) {
+    } else if (pending && answerEvaluation?.isAnswer && !topicShiftHandled) {
       // The user answered the pending question. Capture the match quality on the
       // inbound event for analytics, but do not rewrite perception observations here.
       await prisma.event.update({
@@ -1297,6 +1330,33 @@ export async function processInbound(
       safetyFlag: "none",
       updatePatientState: { updateNarrative: true },
     };
+  }
+
+  // L5 deferred question re-raise: if the planner is ready to close the session
+  // but we still have budget and there are deferred questions from earlier
+  // topic shifts, ask the oldest deferred question before closing.
+  if (
+    activeCheckIn &&
+    plannerOutput.nextAction.type === "end_session" &&
+    (turnsRemaining === undefined || turnsRemaining > 0)
+  ) {
+    const deferredQuestion = await popDeferredQuestion(prisma, activeCheckIn.id);
+    if (deferredQuestion) {
+      plannerOutput = {
+        reasoning: "Re-raising a deferred question before closing the session.",
+        sessionObjective: deferredQuestion.purpose,
+        nextAction: {
+          type: "ask",
+          topic: deferredQuestion.topic,
+          purpose: `Before we finish: ${deferredQuestion.purpose}`,
+          expectedResponseType: deferredQuestion.expectedResponseType,
+          options: deferredQuestion.options,
+          budgetCost: 0,
+        },
+        safetyFlag: "none",
+        updatePatientState: {},
+      };
+    }
   }
 
   // L5 Dialogue
