@@ -34,6 +34,7 @@ import {
   getSessionTurnBudget,
   MAX_REPROMPTS,
   type PendingQuestion,
+  type AnswerConfidenceResult,
 } from "./turn-manager.js";
 import { hasLlmQuota, incrementLlmQuota } from "./llm-quota.js";
 import { scheduleNextCheckInOffset, getBucket } from "./experiments.js";
@@ -261,6 +262,25 @@ async function finalizeCheckInSession(
   }
 
   return briefMessages;
+}
+
+export function isInsufficientExceptionAnswer(
+  message: InboundMessage,
+  answerEvaluation: AnswerConfidenceResult
+): boolean {
+  const text = (message.content.text ?? "").trim().toLowerCase();
+  if (text.length < 5) return true;
+  const vaguePatterns = [
+    /don't know/i,
+    /not sure/i,
+    /no idea/i,
+    /can't say/i,
+    /unsure/i,
+    /maybe/i,
+  ];
+  if (vaguePatterns.some((p) => p.test(text))) return true;
+  if (answerEvaluation.matchMethod === "text" && answerEvaluation.confidence < 0.5) return true;
+  return false;
 }
 
 function safetyWrapWithSummary(
@@ -1165,6 +1185,58 @@ export async function processInbound(
           } as unknown as Prisma.InputJsonValue,
         },
       });
+
+      // Multi-turn exception mode: if the answer is vague or insufficient, reprompt
+      // the same exception question before moving to the next one. This keeps the
+      // user in the clarifying loop rather than accepting low-information replies.
+      if (activeCheckIn.inExceptionMode && isInsufficientExceptionAnswer(message, answerEvaluation)) {
+        const { repromptCount } = await getTurnState(prisma, activeCheckIn.id);
+        if (repromptCount < getMaxReprompts()) {
+          const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+          const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+          const renderOptions = {
+            style: conversationStyle,
+            locale: user.locale,
+            cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+            outOfSession: !isSessionOpen(user, context.now),
+            templateResolver: context.templateResolver,
+            templateContext: {
+              nickname: user.nickname ?? undefined,
+              firstName: user.nickname ?? undefined,
+            },
+          };
+          const nextRepromptCount = repromptCount + 1;
+          const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
+          const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+          await saveOutboundMessages(
+            prisma,
+            user.id,
+            messages,
+            cycle.id,
+            new Date(),
+            inboundEventId,
+            perception.traceId,
+            activeCheckIn.id
+          );
+          await recordReprompt(
+            prisma,
+            user.id,
+            cycle.id,
+            activeCheckIn.id,
+            pending,
+            nextRepromptCount,
+            "insufficient_exception_answer",
+            context.now,
+            perception.traceId
+          );
+          return {
+            messages,
+            trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+          };
+        }
+        // If max reprompts reached in exception mode, fall through to the planner
+        // so it moves on to the next exception question or ends the session.
+      }
     }
   }
 
