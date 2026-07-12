@@ -14,6 +14,8 @@ export interface PendingQuestion {
   askedAt: string;
   /** Number of clarification messages already sent for this pending question. */
   clarificationCount?: number;
+  /** Number of uncertainty probes already sent for this pending question. */
+  uncertaintyCount?: number;
 }
 
 export interface TurnState {
@@ -783,6 +785,99 @@ function buildExampleAnswer(pending: PendingQuestion, locale: DialogueLocale): s
     return `"${exampleLabels.join(" and ")}"`;
   }
   return undefined;
+}
+
+const UNCERTAINTY_PATTERNS = [
+  /i don't know/i,
+  /i do not know/i,
+  /not sure/i,
+  /no idea/i,
+  /can't remember/i,
+  /cannot remember/i,
+  /can't recall/i,
+  /cannot recall/i,
+  /unsure/i,
+  /^idk$/i,
+];
+
+export function looksLikeUncertaintyRequest(text: string): boolean {
+  return UNCERTAINTY_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function buildUncertaintyProbeMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions,
+  uncertaintyCount = 0
+): Promise<OutboundMessage> {
+  const purpose = pending.purpose.replace(/\?$/, "").trim();
+  let text: string;
+  if (uncertaintyCount === 0) {
+    text = `No problem — if you're not sure about ${purpose.toLowerCase()}, just take your best guess, or reply SKIP to move on.`;
+  } else {
+    text = `That's okay — reply SKIP if you'd rather move on, and we can come back to this another time.`;
+  }
+
+  const probeOutput: PlannerOutput = {
+    reasoning: "User expressed uncertainty about the pending question; sending a soft probe.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: text,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, probeOutput, options);
+}
+
+export async function recordUncertainAnswer(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  eventId: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.observation.create({
+    data: {
+      userId,
+      cycleId,
+      eventId,
+      timestamp: now,
+      category: "subjective" as ObservationCategory,
+      concept: pending.topic,
+      value: "uncertain" as Prisma.InputJsonValue,
+      attributes: { reason: "user_uncertain" } as Prisma.InputJsonValue,
+      confidence: 1,
+      extractedBy: "rule",
+    },
+  });
+
+  await clearPendingQuestion(prisma, checkInId);
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "user_action" as const,
+      payload: {
+        action: "uncertain_answer",
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
 }
 
 const SKIP_PATTERNS = [

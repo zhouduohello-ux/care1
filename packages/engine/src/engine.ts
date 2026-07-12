@@ -18,6 +18,9 @@ import {
   buildRepromptMessage,
   buildClarificationMessage,
   looksLikeClarificationRequest,
+  looksLikeUncertaintyRequest,
+  buildUncertaintyProbeMessage,
+  recordUncertainAnswer,
   looksLikeSkipRequest,
   recordSkippedQuestion,
   looksLikeGoBackRequest,
@@ -968,6 +971,56 @@ export async function processInbound(
               });
 
               const { messages, summary } = safetyWrapWithSummary(userId, [clarification]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
+              return {
+                messages,
+                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+              };
+            }
+          } else if (looksLikeUncertaintyRequest(perception.rawText)) {
+            // Uncertainty request: the user says they don't know the answer.
+            // Probe once without consuming a reprompt; if they repeat it, treat
+            // as an explicit uncertain answer and move on.
+            const uncertaintyCount = pending.uncertaintyCount ?? 0;
+            if (uncertaintyCount >= 1) {
+              await recordUncertainAnswer(
+                prisma,
+                user.id,
+                cycle.id,
+                activeCheckIn.id,
+                pending,
+                inboundEventId,
+                context.now,
+                perception.traceId
+              );
+              // Fall through to L4 Planner so it can ask the next question.
+            } else {
+              const probe = await buildUncertaintyProbeMessage(userId, pending, renderOptions, uncertaintyCount);
+              await prisma.checkIn.update({
+                where: { id: activeCheckIn.id },
+                data: {
+                  pendingQuestion: {
+                    ...pending,
+                    uncertaintyCount: uncertaintyCount + 1,
+                  } as unknown as Prisma.InputJsonValue,
+                },
+              });
+              await prisma.event.create({
+                data: {
+                  userId: user.id,
+                  cycleId: cycle.id,
+                  checkInId: activeCheckIn.id,
+                  type: "turn_reprompt" as const,
+                  payload: {
+                    topic: pending.topic,
+                    action: "uncertainty_probe",
+                    uncertaintyCount: uncertaintyCount + 1,
+                  } as unknown as Prisma.InputJsonValue,
+                  timestamp: context.now,
+                  traceId: perception.traceId,
+                },
+              });
+              const { messages, summary } = safetyWrapWithSummary(userId, [probe]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               return {
                 messages,

@@ -11,6 +11,9 @@ import {
   buildRepromptMessage,
   buildClarificationMessage,
   looksLikeClarificationRequest,
+  looksLikeUncertaintyRequest,
+  buildUncertaintyProbeMessage,
+  recordUncertainAnswer,
   looksLikeSkipRequest,
   recordSkippedQuestion,
   looksLikeGoBackRequest,
@@ -660,6 +663,122 @@ describe("recordSkippedQuestion", () => {
           category: "subjective",
           concept: "reliever_use",
           value: "no_answer",
+          extractedBy: "rule",
+        }),
+      })
+    );
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "user_action",
+          traceId: "trace_1",
+        }),
+      })
+    );
+  });
+});
+
+describe("looksLikeUncertaintyRequest", () => {
+  it("returns true for uncertainty phrases", () => {
+    expect(looksLikeUncertaintyRequest("I don't know")).toBe(true);
+    expect(looksLikeUncertaintyRequest("I do not know")).toBe(true);
+    expect(looksLikeUncertaintyRequest("not sure")).toBe(true);
+    expect(looksLikeUncertaintyRequest("no idea")).toBe(true);
+    expect(looksLikeUncertaintyRequest("can't remember")).toBe(true);
+    expect(looksLikeUncertaintyRequest("cannot recall")).toBe(true);
+    expect(looksLikeUncertaintyRequest("unsure")).toBe(true);
+    expect(looksLikeUncertaintyRequest("idk")).toBe(true);
+  });
+
+  it("returns false for normal answers", () => {
+    expect(looksLikeUncertaintyRequest("none")).toBe(false);
+    expect(looksLikeUncertaintyRequest("I woke up twice")).toBe(false);
+    expect(looksLikeUncertaintyRequest("skip")).toBe(false);
+    expect(looksLikeUncertaintyRequest("yes")).toBe(false);
+  });
+});
+
+describe("buildUncertaintyProbeMessage", () => {
+  it("renders a first-time probe with the question purpose", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often have you used your reliever inhaler in the past week?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildUncertaintyProbeMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    }, 0);
+    expect(message.content.text).toContain("if you're not sure");
+    expect(message.content.text).toContain("SKIP");
+  });
+
+  it("renders a second-time probe that offers to move on", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often have you used your reliever inhaler in the past week?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildUncertaintyProbeMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    }, 1);
+    expect(message.content.text).toContain("reply SKIP");
+    expect(message.content.text).toContain("come back to this another time");
+  });
+});
+
+describe("recordUncertainAnswer", () => {
+  it("creates uncertain observation, clears pending, and writes user_action event", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const observationCreate = vi.fn().mockResolvedValue(undefined);
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      observation: { create: observationCreate },
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordUncertainAnswer(
+      prisma,
+      "user_1",
+      "cycle_1",
+      "checkin_1",
+      pending,
+      "event_1",
+      new Date("2026-07-11T00:00:00Z"),
+      "trace_1"
+    );
+
+    expect(observationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          eventId: "event_1",
+          category: "subjective",
+          concept: "reliever_use",
+          value: "uncertain",
           extractedBy: "rule",
         }),
       })
