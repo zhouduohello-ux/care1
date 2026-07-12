@@ -12,6 +12,9 @@ import {
   looksLikeClarificationRequest,
   looksLikeSkipRequest,
   recordSkippedQuestion,
+  looksLikeGoBackRequest,
+  goBackToPreviousQuestion,
+  buildPreviousQuestionMessage,
   classifyNonAnswer,
   getTurnState,
   recordReprompt,
@@ -196,28 +199,30 @@ describe("buildRepromptMessage", () => {
 });
 
 describe("getTurnState", () => {
-  it("returns pending question and reprompt count from CheckIn", async () => {
+  it("returns pending question, reprompt count and question history from CheckIn", async () => {
     const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "2026-07-11T00:00:00.000Z" };
+    const history = [{ topic: "nighttime_symptoms", purpose: "Night?", expectedResponseType: "single_choice" as const, options: ["night_none"], askedAt: "2026-07-11T00:00:00.000Z" }];
     const prisma = {
       checkIn: {
-        findUnique: vi.fn().mockResolvedValue({ pendingQuestion: pending, repromptCount: 1 }),
+        findUnique: vi.fn().mockResolvedValue({ pendingQuestion: pending, repromptCount: 1, questionHistory: history }),
       },
     } as unknown as import("@carememory/db").PrismaClient;
 
     const result = await getTurnState(prisma, "checkin_1");
     expect(result.pendingQuestion).toEqual(pending);
     expect(result.repromptCount).toBe(1);
+    expect(result.questionHistory).toEqual(history);
     expect(prisma.checkIn.findUnique).toHaveBeenCalledWith({
       where: { id: "checkin_1" },
-      select: { pendingQuestion: true, repromptCount: true },
+      select: { pendingQuestion: true, repromptCount: true, questionHistory: true },
     });
   });
 
-  it("returns zero reprompt count when no check-in exists", async () => {
+  it("returns zero reprompt count and empty history when no check-in exists", async () => {
     const prisma = {
       checkIn: { findUnique: vi.fn().mockResolvedValue(null) },
     } as unknown as import("@carememory/db").PrismaClient;
-    expect(await getTurnState(prisma, "checkin_1")).toEqual({ repromptCount: 0 });
+    expect(await getTurnState(prisma, "checkin_1")).toEqual({ repromptCount: 0, questionHistory: [] });
   });
 });
 
@@ -268,15 +273,25 @@ describe("clearPendingQuestion", () => {
 });
 
 describe("setPendingQuestion", () => {
-  it("sets pending question and resets reprompt count", async () => {
+  it("sets pending question, resets reprompt count and appends current pending to history", async () => {
+    const previousPending = { topic: "nighttime_symptoms", purpose: "Night?", expectedResponseType: "single_choice" as const, options: ["night_none"], askedAt: "" };
     const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
     const checkInUpdate = vi.fn().mockResolvedValue(undefined);
-    const prisma = { checkIn: { update: checkInUpdate } } as unknown as import("@carememory/db").PrismaClient;
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ pendingQuestion: previousPending, questionHistory: [] }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
     await setPendingQuestion(prisma, "checkin_1", pending);
     expect(checkInUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "checkin_1" },
-        data: expect.objectContaining({ repromptCount: 0 }),
+        data: expect.objectContaining({
+          repromptCount: 0,
+          pendingQuestion: pending,
+          questionHistory: [previousPending],
+        }),
       })
     );
   });
@@ -486,5 +501,84 @@ describe("recordSkippedQuestion", () => {
         }),
       })
     );
+  });
+});
+
+describe("looksLikeGoBackRequest", () => {
+  it("returns true for go-back phrases", () => {
+    expect(looksLikeGoBackRequest("go back")).toBe(true);
+    expect(looksLikeGoBackRequest("previous question")).toBe(true);
+    expect(looksLikeGoBackRequest("last question")).toBe(true);
+    expect(looksLikeGoBackRequest("back")).toBe(true);
+    expect(looksLikeGoBackRequest("I want to change my answer")).toBe(true);
+  });
+
+  it("returns false for normal answers", () => {
+    expect(looksLikeGoBackRequest("none")).toBe(false);
+    expect(looksLikeGoBackRequest("I woke up twice")).toBe(false);
+    expect(looksLikeGoBackRequest("skip")).toBe(false);
+  });
+});
+
+describe("goBackToPreviousQuestion", () => {
+  it("pops the last question from history and sets it as pending", async () => {
+    const previousPending = { topic: "nighttime_symptoms", purpose: "Night?", expectedResponseType: "single_choice" as const, options: ["night_none"], askedAt: "" };
+    const currentPending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({
+          pendingQuestion: currentPending,
+          questionHistory: [previousPending],
+        }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await goBackToPreviousQuestion(prisma, "checkin_1");
+    expect(result.hasHistory).toBe(true);
+    expect(result.previousQuestion).toEqual(previousPending);
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          pendingQuestion: previousPending,
+          repromptCount: 0,
+          questionHistory: [],
+        }),
+      })
+    );
+  });
+
+  it("returns hasHistory=false when there is no history", async () => {
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ questionHistory: [] }),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await goBackToPreviousQuestion(prisma, "checkin_1");
+    expect(result.hasHistory).toBe(false);
+    expect(result.previousQuestion).toBeUndefined();
+  });
+});
+
+describe("buildPreviousQuestionMessage", () => {
+  it("renders the previous question", async () => {
+    const pending = {
+      topic: "nighttime_symptoms",
+      purpose: "Track nighttime cough or wheeze over the past 2 days.",
+      expectedResponseType: "single_choice" as const,
+      options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildPreviousQuestionMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    });
+    expect(message.content.type).toBe("list");
+    expect(message.content.text).toContain("Going back");
+    expect(message.content.text).toContain("Track nighttime cough or wheeze");
   });
 });

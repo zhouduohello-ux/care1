@@ -19,6 +19,9 @@ import {
   looksLikeClarificationRequest,
   looksLikeSkipRequest,
   recordSkippedQuestion,
+  looksLikeGoBackRequest,
+  goBackToPreviousQuestion,
+  buildPreviousQuestionMessage,
   classifyNonAnswer,
   recordReprompt,
   clearPendingQuestion,
@@ -920,6 +923,24 @@ export async function processInbound(
               perception.traceId
             );
             // Fall through to L4 Planner so it can ask the next question.
+          } else if (looksLikeGoBackRequest(perception.rawText)) {
+            // Go back request: re-ask the previous question if there is one.
+            const goBack = await goBackToPreviousQuestion(prisma, activeCheckIn.id);
+            if (goBack.previousQuestion) {
+              const previousQuestionMessage = await buildPreviousQuestionMessage(
+                userId,
+                goBack.previousQuestion,
+                renderOptions
+              );
+              const { messages, summary } = safetyWrapWithSummary(userId, [previousQuestionMessage]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+              return {
+                messages,
+                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+              };
+            }
+            // No history to go back to: fall through to L4 Planner, which will
+            // re-ask the current question.
           } else {
             const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
             const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
