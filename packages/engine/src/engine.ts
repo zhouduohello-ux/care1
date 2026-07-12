@@ -1274,11 +1274,21 @@ export async function processInbound(
   }
 
   // L4 Planner
+  // Re-fetch the active check-in so that any Turn Manager mutations
+  // (deferred questions, reprompt count, exception mode) are visible.
+  if (activeCheckIn) {
+    activeCheckIn = await prisma.checkIn.findUnique({
+      where: { id: activeCheckIn.id },
+    });
+  }
   const latestNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
     orderBy: { generatedAt: "desc" },
   });
   const recentObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn?.sentAt ?? undefined);
+  const deferredTopics = (
+    (activeCheckIn?.deferredQuestions as unknown as Array<{ topic: string }> | undefined) ?? []
+  ).map((d) => d.topic);
   const plannerInput = {
     patientContext: {
       disease: cycle.disease,
@@ -1299,6 +1309,7 @@ export async function processInbound(
       inExceptionMode: activeCheckIn?.inExceptionMode ?? false,
       exceptionQuestionsAsked: activeCheckIn?.exceptionQuestionsAsked ?? 0,
       conversationStyle: getBucket(userId, "conversation_style").variant,
+      deferredTopics,
     },
     temporalContext: {
       localTime: context.now.toISOString(),

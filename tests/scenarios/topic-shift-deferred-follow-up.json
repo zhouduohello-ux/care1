@@ -1,0 +1,75 @@
+{
+  "id": "topic_shift_deferred_follow_up",
+  "name": "Topic shift with deferred follow-up",
+  "description": "When the user answers a pending check-in question with information about a different topic (a cough), the system defers the original question and re-raises it before closing the session instead of reprompting.",
+  "user": {
+    "phoneNumber": "test_topic_shift"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "I have a cough today" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "reply", "buttonId": "night_none" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 3,
+      "type": "message",
+      "op": "contains",
+      "value": "night",
+      "caseInsensitive": true,
+      "description": "First check-in question is about nighttime symptoms"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "not_contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "Topic shift is not treated as a failed reprompt"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "reliever",
+      "caseInsensitive": true,
+      "description": "System moves on to the next uncovered question after accepting the shifted topic"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "exercise",
+      "caseInsensitive": true,
+      "description": "System asks activity limitation after reliever"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "Before we finish",
+      "caseInsensitive": true,
+      "description": "Deferred nighttime question is re-raised before closing"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "night",
+      "caseInsensitive": true,
+      "description": "Re-raised question is the original nighttime symptoms question"
+    },
+    {
+      "afterStep": 7,
+      "type": "message",
+      "op": "contains",
+      "value": "Brief",
+      "caseInsensitive": true,
+      "description": "Session ends and confirms Brief is ready"
+    }
+  ]
+}

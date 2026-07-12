@@ -93,6 +93,8 @@ export interface PlannerInput {
     inExceptionMode: boolean;
     exceptionQuestionsAsked?: number;
     conversationStyle?: string;
+    /** Topics that were asked earlier in the session but deferred (e.g. via topic shift). The planner should skip them until they are re-raised. */
+    deferredTopics?: string[];
   };
   temporalContext: {
     localTime: string;

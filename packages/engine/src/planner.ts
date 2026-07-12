@@ -54,7 +54,8 @@ export async function plan(input: PlannerInput, llmClient?: LLMClient, onLlmCall
 
   const questions = buildCheckInQuestions(patientContext.medications);
   const askedTopics = new Set(patientContext.recentObservations.map((o) => o.concept));
-  const nextQuestion = questions.find((q) => !askedTopics.has(q.topic));
+  const deferredTopics = new Set(conversationContext.deferredTopics ?? []);
+  const nextQuestion = questions.find((q) => !askedTopics.has(q.topic) && !deferredTopics.has(q.topic));
 
   if (!nextQuestion) {
     return endSession("Thank you for your updates. Your Disease Card will be updated shortly.");
@@ -108,6 +109,7 @@ async function planWithLlm(
       : "Keep purpose concise and patient-friendly.";
 
   const availableTopics = questions.map((q) => q.topic).join(", ");
+  const deferredTopics = new Set(input.conversationContext.deferredTopics ?? []);
 
   const systemPrompt = `You are the planning layer of CareMemory, a UK asthma follow-up assistant.
 You must return ONLY valid JSON matching this schema:
@@ -127,6 +129,7 @@ You must return ONLY valid JSON matching this schema:
 }
 Rules:
 - Choose the next uncovered asthma control topic from: ${availableTopics}.
+- Do not choose topics already covered by observations or deferred to later: ${JSON.stringify([...askedTopics, ...deferredTopics])}.
 - If all topics are covered, budget is exhausted, or turns remaining is 1 or less, use type "end_session".
 - Do not diagnose or give treatment advice.
 - ${styleInstruction}`;
@@ -137,6 +140,7 @@ Budget remaining: ${input.conversationContext.budgetRemaining}
 Turns remaining: ${input.conversationContext.turnsRemaining ?? "unknown"}
 Recent observations: ${JSON.stringify(input.patientContext.recentObservations)}
 Already asked topics: ${JSON.stringify([...askedTopics])}
+Deferred topics (to be re-raised later): ${JSON.stringify([...deferredTopics])}
 Current intent: ${input.conversationContext.currentIntent}`;
 
   const messages: LLMMessage[] = [
@@ -154,8 +158,8 @@ Current intent: ${input.conversationContext.currentIntent}`;
   // Validate that the LLM chose a known uncovered topic
   if (parsed.nextAction.type === "ask") {
     const question = getCheckInQuestion(parsed.nextAction.topic, input.patientContext.medications);
-    if (!question || askedTopics.has(parsed.nextAction.topic)) {
-      throw new Error("LLM chose invalid or already asked topic");
+    if (!question || askedTopics.has(parsed.nextAction.topic) || deferredTopics.has(parsed.nextAction.topic)) {
+      throw new Error("LLM chose invalid, already asked, or deferred topic");
     }
     return {
       ...parsed,
