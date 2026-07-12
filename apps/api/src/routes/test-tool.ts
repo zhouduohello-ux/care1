@@ -302,6 +302,26 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
     return reply.send({ reset: true });
   });
 
+  fastify.post("/dev/test-tool/api/reset-all-test-users", async (_request, reply) => {
+    // Clean up every user whose phone number looks like it was created by the E2E runner.
+    // This prevents data from previous test runs from accumulating and slowing down long suites.
+    const testUsers = await fastify.prisma.user.findMany({
+      where: { phoneNumber: { startsWith: "test_" } },
+      select: { id: true, phoneNumber: true },
+    });
+
+    let deleted = 0;
+    for (const user of testUsers) {
+      await deleteUserData(fastify.prisma, user.id);
+      if (user.phoneNumber) {
+        fastify.clock.resetUser(user.phoneNumber);
+      }
+      deleted += 1;
+    }
+
+    return reply.send({ reset: true, deleted });
+  });
+
   fastify.post("/dev/test-tool/api/trigger-expired-pending", async (request: FastifyRequest<{ Body: { userId: string } }>, reply) => {
     const { userId } = request.body;
     await processExpiredPendingQuestions(fastify.prisma, fastify.clock.now(userId), { timeoutMs: getPendingTimeoutMs() });

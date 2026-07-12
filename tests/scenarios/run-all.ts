@@ -60,6 +60,18 @@ async function main() {
   }
 
   const runner = new ScenarioRunner({ apiBaseUrl, verbose });
+
+  process.stdout.write("Resetting all test users from previous runs... ");
+  try {
+    const { deleted } = await runner.resetAllTestUsers();
+    console.log(`✓ (${deleted} deleted)`);
+  } catch (err) {
+    console.log("✗");
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`Failed to reset test users: ${message}`);
+    process.exit(1);
+  }
+
   const results: RunResult[] = [];
 
   for (const scenarioPath of paths) {
