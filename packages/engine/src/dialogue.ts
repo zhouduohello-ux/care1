@@ -99,6 +99,7 @@ export async function renderMessage(
     const rendered = renderScaleQuestion(userId, action.purpose, capability, options.style ?? "v1", locale);
     message = applyTemplateIfNeeded(rendered, capability, options, locale);
   } else if (action.type === "ask" && action.expectedResponseType === "single_choice" && action.options) {
+    const isReprompt = action.budgetCost === 0;
     const rendered = renderSingleChoiceQuestion(
       userId,
       action.purpose,
@@ -109,8 +110,9 @@ export async function renderMessage(
       locale,
       options.listActionButtonTitle
     );
-    message = applyTemplateIfNeeded(rendered, capability, options, locale);
+    message = isReprompt ? rendered : applyTemplateIfNeeded(rendered, capability, options, locale);
   } else if (action.type === "ask" && action.expectedResponseType === "multi_select" && action.options) {
+    const isReprompt = action.budgetCost === 0;
     const rendered = renderMultiSelectQuestion(
       userId,
       action.purpose,
@@ -120,7 +122,7 @@ export async function renderMessage(
       options.style ?? "v1",
       locale
     );
-    message = applyTemplateIfNeeded(rendered, capability, options, locale);
+    message = isReprompt ? rendered : applyTemplateIfNeeded(rendered, capability, options, locale);
   } else {
     const rawText = styleText(action.purpose, options.style ?? "v1", action.type === "ask" ? "question" : "inform", locale);
     const { message: polishedMessage, polished: didPolish } = await polishIfEnabled(

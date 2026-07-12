@@ -105,6 +105,16 @@ export async function perceive(
     });
   }
 
+  // Wheezing during or after activity can signal loss of control; treat as medium anomaly
+  // so the planner enters exception mode without triggering the high-risk fast-path.
+  if (/\bwheez/i.test(text)) {
+    result.anomalies.push({
+      type: "possible_worsening_symptom",
+      description: "User reports wheezing.",
+      severity: "medium",
+    });
+  }
+
   if (/rash|swelling|allergic|side effect|made me feel worse|vomit|dizziness|palpitations/i.test(text)) {
     result.anomalies.push({
       type: "possible_adverse_event",
@@ -158,6 +168,23 @@ export async function perceive(
       result.extractedObservations = llmResult.extractedObservations;
       result.anomalies.push(...llmResult.anomalies);
       result.safetyFlags.push(...llmResult.safetyFlags);
+
+      // Deterministic guard: wheezing on its own is concerning but not an emergency.
+      // Downgrade any LLM high safety flag for wheezing to medium so the engine enters
+      // exception mode instead of the emergency fast-path.
+      if (/\bwheez/i.test(text)) {
+        result.safetyFlags = result.safetyFlags.map((f) =>
+          f.riskLevel === "high" ? { ...f, riskLevel: "medium" as const } : f
+        );
+        if (!result.anomalies.some((a) => /wheez/i.test(a.description))) {
+          result.anomalies.push({
+            type: "possible_worsening_symptom",
+            description: "User reports wheezing.",
+            severity: "medium",
+          });
+        }
+      }
+
       return result;
     } catch {
       // Fall through to rule-based extraction
@@ -211,6 +238,7 @@ Guidelines:
 - Use "question" when the patient is asking their own question, not answering a check-in prompt.
 - For each extracted observation, include an "attributes" object with severity, frequency, or duration when the message implies them.
 - Detect anomalies by type: management_rule_violation (response contradicts care guidelines), compound_signal_conflict (multiple worsening signals together), severity_escalation (sudden worsening), pattern_contradiction (contradicts known patterns).
+- For safetyFlags: use riskLevel "high" ONLY for emergency language (e.g., can't breathe, 999, blue lips, no relief). Use "medium" for concerning but non-emergency symptoms such as wheezing or chest tightness that has eased.
 Do not diagnose or give treatment advice. Use concept names like "nighttime_symptoms", "reliever_use", "activity_limitation", "trigger_exposure", "controller_adherence" when applicable.`;
 
   const messages: LLMMessage[] = [
@@ -281,6 +309,7 @@ export const DEFAULT_BUTTON_MAP: Record<string, Observation> = {
     activity_yes: { category: "function", concept: "activity_limitation", value: "yes", confidence: 1, extractedBy: "rule" },
     adherence_yes: { category: "medication", concept: "controller_adherence", value: "yes", confidence: 1, extractedBy: "rule" },
     adherence_no: { category: "medication", concept: "controller_adherence", value: "no", confidence: 1, extractedBy: "rule" },
+    adherence_skip: { category: "medication", concept: "controller_adherence", value: "skip", confidence: 1, extractedBy: "rule" },
     trigger_pollen: { category: "trigger", concept: "exposure", value: "pollen", confidence: 1, extractedBy: "rule" },
     trigger_dust: { category: "trigger", concept: "exposure", value: "dust", confidence: 1, extractedBy: "rule" },
     trigger_cold: { category: "trigger", concept: "exposure", value: "cold_air", confidence: 1, extractedBy: "rule" },

@@ -21,7 +21,7 @@ export interface Scenario {
     afterStep: number;
     type: "message" | "message_type" | "planner" | "safety" | "observation" | "diseaseCard" | "brief" | "pdf";
     path?: string;
-    op: "eq" | "contains" | "not_contains" | "matches" | "in" | "exists";
+    op: "eq" | "contains" | "not_contains" | "matches" | "in" | "exists" | "containsModule";
     value?: unknown;
     filter?: Record<string, unknown>;
     caseInsensitive?: boolean;
@@ -290,7 +290,14 @@ export class ScenarioRunner {
   ): Promise<{ pass: boolean; actual: unknown; reason?: string }> {
     if (assertion.type === "diseaseCard") {
       const state = await this.getSessionState(userId);
-      const actual = !!state.diseaseCard;
+      const card = state.diseaseCard;
+      if (assertion.op === "containsModule") {
+        const modules = (card as { modules?: Array<{ id: string }> } | undefined)?.modules ?? [];
+        const actual = modules.map((m) => m.id);
+        const pass = actual.includes(String(assertion.value));
+        return { pass, actual };
+      }
+      const actual = !!card;
       const pass = assertion.op === "exists" ? actual : !actual;
       return { pass, actual };
     }

@@ -56,6 +56,11 @@ function styleClosingText(text: string): string {
 }
 
 function styleQuestionText(text: string): string {
+  // Reprompt prefixes should be preserved exactly; do not add conversational prefixes.
+  if (/^(I didn't catch that\.|Just to confirm:|Still waiting:)/i.test(text)) {
+    return text;
+  }
+
   let styled = text
     .replace(/^Please tell me /i, "Could you let me know ")
     .replace(/^Please let me know /i, "Could you tell me ")
@@ -64,13 +69,15 @@ function styleQuestionText(text: string): string {
     .replace(/^Check whether /i, "Have you noticed whether ");
 
   // Avoid robotic repeats of the same opening phrase across a session.
+  // Use a deterministic prefix based on the question text so tests are stable.
   const conversationalPrefixes = [
     "Quick question:",
     "One more thing:",
     "Could you let me know",
     "I'd like to check:",
   ];
-  const prefix = conversationalPrefixes[Math.floor(Math.random() * conversationalPrefixes.length)];
+  const prefixIndex = Math.abs(hashString(styled)) % conversationalPrefixes.length;
+  const prefix = conversationalPrefixes[prefixIndex];
 
   // Only prefix if the sentence is short and direct.
   if (!styled.includes(":") && styled.length < 80 && !/^Could you/i.test(styled)) {
@@ -79,6 +86,16 @@ function styleQuestionText(text: string): string {
   }
 
   return styled;
+}
+
+function hashString(text: string): number {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    const char = text.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash |= 0;
+  }
+  return hash;
 }
 
 function styleInformText(text: string): string {

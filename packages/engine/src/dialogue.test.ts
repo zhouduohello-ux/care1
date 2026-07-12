@@ -137,6 +137,21 @@ describe("renderMessage", async () => {
       expect(message.content.text).toContain("Woke me up (reply night_woke_up)");
     });
 
+    it("renders controller_adherence question with known labels", async () => {
+      const output = makePlannerOutput({
+        type: "ask",
+        topic: "controller_adherence",
+        expectedResponseType: "single_choice",
+        options: ["adherence_yes", "adherence_no", "adherence_skip"],
+      });
+      const message = await renderMessage("user_1", output, { capability: whatsappCapability });
+
+      expect(message.content.type).toBe("buttons");
+      expect(message.content.buttons).toHaveLength(3);
+      expect(message.content.buttons?.[0]).toEqual({ id: "adherence_yes", title: "Yes" });
+      expect(message.content.buttons?.[2]).toEqual({ id: "adherence_skip", title: "Skip" });
+    });
+
     it("falls back to options IDs for unknown topics", async () => {
       const output = makePlannerOutput({
         type: "ask",

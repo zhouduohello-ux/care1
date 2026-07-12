@@ -1,8 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { plan } from "./planner.js";
 import type { PlannerInput } from "./types.js";
+import type { MedicationBaseline } from "./question-bank.js";
 
-function baseInput(): PlannerInput {
+function baseInput(medications?: MedicationBaseline): PlannerInput {
   return {
     patientContext: {
       disease: "asthma",
@@ -11,6 +12,7 @@ function baseInput(): PlannerInput {
       narrativeSummary: "",
       recentObservations: [],
       openIssues: [],
+      medications,
     },
     conversationContext: {
       currentIntent: "checkin_start",
@@ -90,5 +92,38 @@ describe("planner", () => {
     const output = await plan(input);
     expect(output.nextAction.type).toBe("safety_response");
     expect(output.safetyFlag).toBe("high");
+  });
+
+  it("includes controller_adherence when the user has a controller", async () => {
+    const medications: MedicationBaseline = { baseline: [{ name: "Seretide", type: "controller" }] };
+    const input = baseInput(medications);
+    input.conversationContext.budgetRemaining = 4;
+    const output = await plan(input);
+    expect(output.nextAction.type).toBe("ask");
+    expect(output.nextAction.topic).toBe("nighttime_symptoms");
+
+    // After core questions, adherence should be asked if budget remains.
+    input.patientContext.recentObservations = [
+      { category: "symptom", concept: "nighttime_symptoms", value: "none" },
+      { category: "medication", concept: "reliever_use", value: 0 },
+      { category: "function", concept: "activity_limitation", value: "no" },
+    ];
+    const adherenceOutput = await plan(input);
+    expect(adherenceOutput.nextAction.type).toBe("ask");
+    expect(adherenceOutput.nextAction.topic).toBe("controller_adherence");
+    expect(adherenceOutput.nextAction.purpose).toContain("Seretide");
+  });
+
+  it("ends session after controller_adherence is covered", async () => {
+    const medications: MedicationBaseline = { baseline: [{ name: "Seretide", type: "controller" }] };
+    const input = baseInput(medications);
+    input.patientContext.recentObservations = [
+      { category: "symptom", concept: "nighttime_symptoms", value: "none" },
+      { category: "medication", concept: "reliever_use", value: 0 },
+      { category: "function", concept: "activity_limitation", value: "no" },
+      { category: "medication", concept: "controller_adherence", value: "yes" },
+    ];
+    const output = await plan(input);
+    expect(output.nextAction.type).toBe("end_session");
   });
 });

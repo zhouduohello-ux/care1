@@ -6,6 +6,7 @@ export const cyGB: DialogueLocale = {
     nighttime_symptoms: ["Dim", "Ysgafn", "Cwsg wedi'i darfu", "Deffroais i"],
     reliever_use: ["0 gwaith", "1 gwaith", "2 waith", "3+ gwaith"],
     activity_limitation: ["Dim cyfyngiad", "Ydy, cyfyngedig"],
+    controller_adherence: ["Ydw", "Nac ydw", "Hepgor"],
   },
   optionSynonyms: {
     night_none: ["dim", "dim symptomau"],
@@ -18,6 +19,9 @@ export const cyGB: DialogueLocale = {
     reliever_3_plus: ["3", "3+", "tair gwaith neu fwy"],
     activity_no: ["na", "dim cyfyngiad"],
     activity_yes: ["ydy", "cyfyngedig"],
+    adherence_yes: ["ydw", "yes", "cymryd", "defnyddio"],
+    adherence_no: ["nac ydw", "no", "anghofio", "colli"],
+    adherence_skip: ["hepgor", "skip", "na", "none"],
   },
   scaleWordMap: {
     1: ["dim", "ysgafn"],

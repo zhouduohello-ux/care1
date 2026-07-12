@@ -1,0 +1,42 @@
+{
+  "id": "medication_adherence",
+  "name": "Medication adherence question for controller users",
+  "description": "Loads a persona with a controller medication baseline and verifies the check-in asks a controller_adherence question before closing.",
+  "user": {
+    "phoneNumber": "test_medication_adherence"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma_with_controller" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" },
+    { "action": "reply", "buttonId": "adherence_yes" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 6,
+      "type": "planner",
+      "path": "nextAction.topic",
+      "op": "eq",
+      "value": "controller_adherence",
+      "description": "Fourth question asks about controller adherence"
+    },
+    {
+      "afterStep": 7,
+      "type": "planner",
+      "path": "nextAction.type",
+      "op": "eq",
+      "value": "end_session",
+      "description": "Check-in ends after adherence question is answered"
+    },
+    {
+      "afterStep": 7,
+      "type": "diseaseCard",
+      "op": "containsModule",
+      "value": "controller_adherence",
+      "description": "Disease Card includes controller adherence module"
+    }
+  ]
+}

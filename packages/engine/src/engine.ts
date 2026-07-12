@@ -37,7 +37,8 @@ import {
   supersedePreviousObservations,
   generateSessionNarrativeSummary,
 } from "./memory.js";
-import { getPendingOnboardingField, handleOnboardingInput, askNext } from "./onboarding.js";
+import { handleOnboardingInput, askNext, getPendingOnboardingField } from "./onboarding.js";
+import { hasControllerMedication, type MedicationBaseline } from "./question-bank.js";
 
 export * from "./types.js";
 export { perceive, safetyCheck, plan, renderMessage };
@@ -761,6 +762,7 @@ export async function processInbound(
       narrativeSummary: latestNarrative?.content ?? "",
       recentObservations,
       openIssues: [],
+      medications: user.medications as unknown as MedicationBaseline | undefined,
     },
     conversationContext: {
       currentIntent: perception.intent.primary,
@@ -1015,13 +1017,15 @@ export async function handleCheckInTrigger(
     return [];
   }
 
+  const baseBudget = hasControllerMedication(cycle.user.medications as unknown as MedicationBaseline | undefined) ? 4 : 3;
+
   // Create check-in as SCHEDULED first, then update to SENT after messages are sent
   const checkIn = await prisma.checkIn.create({
     data: {
       cycleId: cycle.id,
       scheduledAt: context.now,
       status: "SCHEDULED",
-      budgetRemaining: 3,
+      budgetRemaining: baseBudget,
     },
   });
   await prisma.event.create({
@@ -1050,12 +1054,13 @@ export async function handleCheckInTrigger(
       narrativeSummary: cycleNarrative?.content ?? "",
       recentObservations,
       openIssues: [],
+      medications: cycle.user.medications as unknown as MedicationBaseline | undefined,
     },
     conversationContext: {
       currentIntent: "checkin_start" as const,
       intentStack: [],
       questionsAskedThisSession: 0,
-      budgetRemaining: 3,
+      budgetRemaining: baseBudget,
       inExceptionMode: false,
       exceptionQuestionsAsked: 0,
       conversationStyle: getBucket(cycle.user.phoneNumber, "conversation_style").variant,

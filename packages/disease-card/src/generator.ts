@@ -69,6 +69,21 @@ export function generateDiseaseCard(
     });
   }
 
+  // Controller adherence
+  const adherenceObs = byConcept.get("controller_adherence") ?? [];
+  if (adherenceObs.length > 0) {
+    modules.push({
+      id: "controller_adherence",
+      title: "Controller Adherence",
+      type: "medication",
+      content: {
+        latest: adherenceObs[adherenceObs.length - 1]?.value,
+        count: adherenceObs.length,
+        values: adherenceObs.map((o) => o.value),
+      },
+    });
+  }
+
   // Activity limitation
   const activityObs = byConcept.get("activity_limitation") ?? [];
   if (activityObs.length > 0) {
