@@ -1342,6 +1342,21 @@ export async function processInbound(
   ) {
     const deferredQuestion = await popDeferredQuestion(prisma, activeCheckIn.id);
     if (deferredQuestion) {
+      await prisma.event.create({
+        data: {
+          userId: user.id,
+          cycleId: cycle.id,
+          checkInId: activeCheckIn.id,
+          type: "user_action" as const,
+          payload: {
+            action: "deferred_question_reraised",
+            topic: deferredQuestion.topic,
+            expectedResponseType: deferredQuestion.expectedResponseType,
+          } as unknown as Prisma.InputJsonValue,
+          timestamp: context.now,
+          traceId: perception.traceId,
+        },
+      });
       plannerOutput = {
         reasoning: "Re-raising a deferred question before closing the session.",
         sessionObjective: deferredQuestion.purpose,
