@@ -259,8 +259,60 @@ Allowed options: ${JSON.stringify(pending.options ?? [])}
 Patient reply: ${message.content.text ?? ""}
 Perception extracted observations: ${JSON.stringify(perception.extractedObservations)}`;
 
+  const fewShotExamples: LLMMessage[] = [
+    {
+      role: "user",
+      content: `Question purpose: How often did you use your reliever inhaler in the last 48 hours?
+Expected response type: single_choice
+Allowed options: ["reliever_0","reliever_1","reliever_2","reliever_3_plus"]
+Patient reply: "three or four times"
+Perception extracted observations: []`,
+    },
+    {
+      role: "assistant",
+      content: JSON.stringify({
+        isAnswer: true,
+        confidence: 0.9,
+        reasoning: "User gives a frequency that maps to the 3+ option.",
+      }),
+    },
+    {
+      role: "user",
+      content: `Question purpose: Did asthma wake you up at night?
+Expected response type: single_choice
+Allowed options: ["night_none","night_mild","night_disturbed","night_woke_up"]
+Patient reply: "What do you mean by wake up?"
+Perception extracted observations: []`,
+    },
+    {
+      role: "assistant",
+      content: JSON.stringify({
+        isAnswer: false,
+        confidence: 0.1,
+        reasoning: "User asks for clarification rather than answering.",
+      }),
+    },
+    {
+      role: "user",
+      content: `Question purpose: Did asthma limit your daily activities?
+Expected response type: single_choice
+Allowed options: ["activity_no","activity_yes"]
+Patient reply: "I went running but felt a bit tight in my chest"
+Perception extracted observations: [{"concept":"activity_limitation","value":"yes"}]`,
+    },
+    {
+      role: "assistant",
+      content: JSON.stringify({
+        isAnswer: true,
+        confidence: 0.8,
+        reasoning: "User describes an activity and a related symptom, which answers the activity limitation question.",
+      }),
+    },
+  ];
+
   const messages: LLMMessage[] = [
     { role: "system", content: systemPrompt },
+    ...fewShotExamples,
     { role: "user", content: userPrompt },
   ];
 

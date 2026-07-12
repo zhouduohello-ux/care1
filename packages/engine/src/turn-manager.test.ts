@@ -416,12 +416,34 @@ function mockLlm(responseJson: string): LLMClient {
 describe("isAnswerRelevantWithLlm", () => {
   const pending = { topic: "activity_limitation", purpose: "Were you limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
 
+  it("includes few-shot examples in the prompt", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true, confidence: 0.85 }));
+    await isAnswerRelevantWithLlm(makeInbound({ text: "I couldn't run today" }), makePerception(), pending, client);
+    const messages = (client.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const contents = messages.map((m) => m.content).join("\n");
+    expect(contents).toContain("three or four times");
+    expect(contents).toContain("What do you mean by wake up?");
+    expect(contents).toContain("I went running but felt a bit tight in my chest");
+    expect(messages.filter((m) => m.role === "assistant").length).toBeGreaterThanOrEqual(3);
+  });
+
   it("returns true with confidence when LLM says the reply is an answer", async () => {
     const client = mockLlm(JSON.stringify({ isAnswer: true, confidence: 0.85, reasoning: "The user says they could not run." }));
     const result = await isAnswerRelevantWithLlm(makeInbound({ text: "I couldn't run today" }), makePerception(), pending, client);
     expect(result.isAnswer).toBe(true);
     expect(result.confidence).toBe(0.85);
     expect(client.complete).toHaveBeenCalledTimes(1);
+  });
+
+  it("includes few-shot examples in the prompt", async () => {
+    const client = mockLlm(JSON.stringify({ isAnswer: true, confidence: 0.85 }));
+    await isAnswerRelevantWithLlm(makeInbound({ text: "I couldn't run today" }), makePerception(), pending, client);
+    const messages = (client.complete as ReturnType<typeof vi.fn>).mock.calls[0][0] as Array<{ role: string; content: string }>;
+    const contents = messages.map((m) => m.content).join("\n");
+    expect(contents).toContain("three or four times");
+    expect(contents).toContain("What do you mean by wake up?");
+    expect(contents).toContain("I went running but felt a bit tight in my chest");
+    expect(messages.filter((m) => m.role === "assistant").length).toBeGreaterThanOrEqual(3);
   });
 
   it("returns false when LLM says the reply is not an answer", async () => {
