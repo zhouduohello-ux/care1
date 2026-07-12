@@ -1,7 +1,7 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { generateDiseaseCard } from "@carememory/disease-card";
 import { Prisma } from "@carememory/db";
-import type { Cycle } from "@carememory/db";
+import type { Cycle, User, CheckIn } from "@carememory/db";
 import crypto from "node:crypto";
 import type { EngineContext, EngineTrace, LlmModelType, PlannerOutput, SafetyResult } from "./types.js";
 import { perceive } from "./perception.js";
@@ -119,6 +119,136 @@ function summarizeSafety(results: SafetyResult[]): SafetyResult {
   }
 
   return { approved, riskLevel, requiredAddendums: addendums, blockReason };
+}
+
+
+async function finalizeCheckInSession(
+  context: EngineContext,
+  user: User,
+  cycle: Cycle,
+  activeCheckIn: CheckIn,
+  inboundEventId: string,
+  traceId: string | undefined,
+  style: "v1" | "v2",
+  status: "COMPLETED" | "EXCEPTION"
+): Promise<OutboundMessage[]> {
+  const prisma = context.prisma;
+  const userId = user.phoneNumber;
+
+  await prisma.checkIn.update({
+    where: { id: activeCheckIn.id },
+    data: { status, completedAt: context.now },
+  });
+
+  // Generate session-level narrative summary (func-spec §5.3 step 3)
+  const narrativeClient = resolveLlmClient(context, "perception");
+  if (narrativeClient) {
+    const sessionObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn.sentAt ?? undefined);
+    await generateSessionNarrativeSummary(
+      prisma, user.id, cycle.id, activeCheckIn.id, sessionObservations, narrativeClient, context.now
+    );
+  }
+
+  const allObservations = await prisma.observation.findMany({
+    where: { cycleId: cycle.id, superseded: false },
+    orderBy: { timestamp: "asc" },
+  });
+
+  const previousCard = await prisma.diseaseCard.findFirst({
+    where: { cycleId: cycle.id },
+    orderBy: { version: "desc" },
+    select: { version: true },
+  });
+  const cardData = generateDiseaseCard(cycle.disease, allObservations, user.nickname, previousCard?.version);
+  const accessToken = crypto.randomBytes(32).toString("hex");
+  const expiresAt = new Date(context.now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const diseaseCardRecord = await prisma.diseaseCard.create({
+    data: {
+      userId: user.id,
+      cycleId: cycle.id,
+      disease: cardData.disease,
+      version: cardData.version,
+      modules: cardData.modules as unknown as Prisma.InputJsonValue,
+      rawSummary: cardData.rawSummary,
+      accessToken,
+      expiresAt,
+    },
+  });
+
+  // Generate or update a Brief for this cycle (30-day access token)
+  const briefAccessToken = crypto.randomBytes(32).toString("hex");
+  const briefExpiresAt = new Date(context.now.getTime() + 30 * 24 * 60 * 60 * 1000);
+  const brief = await prisma.brief.upsert({
+    where: { cycleId: cycle.id },
+    update: {
+      diseaseCardId: diseaseCardRecord.id,
+      accessToken: briefAccessToken,
+      expiresAt: briefExpiresAt,
+    },
+    create: {
+      cycleId: cycle.id,
+      diseaseCardId: diseaseCardRecord.id,
+      webUrl: "",
+      accessToken: briefAccessToken,
+      expiresAt: briefExpiresAt,
+    },
+  });
+  await prisma.brief.update({
+    where: { id: brief.id },
+    data: { webUrl: `/b/${brief.id}?t=${briefAccessToken}` },
+  });
+
+  const briefMessages: OutboundMessage[] = [];
+  if (context.webBaseUrl) {
+    const briefUrl = `${context.webBaseUrl}/b/${brief.id}?t=${briefAccessToken}`;
+    const briefOutput: PlannerOutput = {
+      reasoning: "Brief generated. Sending link to patient.",
+      sessionObjective: "Share visit brief link with patient.",
+      nextAction: {
+        type: "generate_brief",
+        topic: "brief_ready",
+        purpose: "Your visit brief is ready.",
+        budgetCost: 0,
+      },
+      safetyFlag: "none",
+      updatePatientState: {},
+    };
+    const briefMessage = await renderMessage(userId, briefOutput, {
+      style,
+      locale: user.locale,
+      cycleContext: { briefUrl },
+    });
+    const { messages: safeBriefMessages } = safetyWrapWithSummary(userId, [briefMessage]);
+    await saveOutboundMessages(
+      prisma,
+      user.id,
+      safeBriefMessages,
+      cycle.id,
+      new Date(),
+      inboundEventId,
+      traceId
+    );
+    briefMessages.push(...safeBriefMessages);
+  }
+
+  // For 4-week plans that have reached ~28 days, or 7-day trials that have
+  // reached ~7 days, mark the cycle as COMPLETED.
+  const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+  if ((cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) || (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7)) {
+    await prisma.cycle.update({
+      where: { id: cycle.id },
+      data: { status: "COMPLETED", endedAt: context.now },
+    });
+  } else {
+    // Schedule the next check-in based on the user's A/B bucket (48h vs 72h) at 10:00 local time
+    const nextCheckinAt = scheduleNextCheckInOffset(userId, context.now);
+    await prisma.cycle.update({
+      where: { id: cycle.id },
+      data: { nextCheckinAt },
+    });
+  }
+
+  return briefMessages;
 }
 
 function safetyWrapWithSummary(
@@ -573,6 +703,35 @@ export async function processInbound(
       await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
     }
     await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId);
+
+    // Severe symptoms during an active check-in end the session immediately,
+    // record an adverse event, and generate the Disease Card / Brief.
+    if (activeCheckIn) {
+      const severeFlag = perception.safetyFlags.find((f) => f.riskLevel === "high");
+      await saveObservations(
+        prisma,
+        user.id,
+        cycle.id,
+        inboundEventId,
+        [
+          {
+            category: "adverse_event",
+            concept: "severe_safety_flag",
+            value: severeFlag?.description ?? perception.rawText,
+            attributes: { highRiskSafetyFlag: true, reason: severeFlag?.type },
+            confidence: 1,
+            extractedBy: "rule",
+          },
+        ],
+        context.now
+      );
+      const style = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+      const briefMessages = await finalizeCheckInSession(
+        context, user, cycle, activeCheckIn, inboundEventId, perception.traceId, style, "EXCEPTION"
+      );
+      messages.push(...briefMessages);
+    }
+
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -864,122 +1023,18 @@ export async function processInbound(
 
   // Generate Disease Card and schedule next check-in when session ends
   if (plannerOutput.nextAction.type === "end_session" && activeCheckIn) {
-    await prisma.checkIn.update({
-      where: { id: activeCheckIn.id },
-      data: {
-        status: activeCheckIn.inExceptionMode ? "EXCEPTION" : "COMPLETED",
-        completedAt: context.now,
-      },
-    });
-
-    // Generate session-level narrative summary (func-spec §5.3 step 3)
-    const narrativeClient = resolveLlmClient(context, "perception");
-    if (narrativeClient) {
-      const sessionObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn.sentAt ?? undefined);
-      await generateSessionNarrativeSummary(
-        prisma, user.id, cycle.id, activeCheckIn.id, sessionObservations, narrativeClient, context.now
-      );
-    }
-
-    const allObservations = await prisma.observation.findMany({
-      where: { cycleId: cycle.id, superseded: false },
-      orderBy: { timestamp: "asc" },
-    });
-
-    const previousCard = await prisma.diseaseCard.findFirst({
-      where: { cycleId: cycle.id },
-      orderBy: { version: "desc" },
-      select: { version: true },
-    });
-    const cardData = generateDiseaseCard(cycle.disease, allObservations, user.nickname, previousCard?.version);
-    const accessToken = crypto.randomBytes(32).toString("hex");
-    const expiresAt = new Date(context.now.getTime() + 7 * 24 * 60 * 60 * 1000);
-    const diseaseCardRecord = await prisma.diseaseCard.create({
-      data: {
-        userId: user.id,
-        cycleId: cycle.id,
-        disease: cardData.disease,
-        version: cardData.version,
-        modules: cardData.modules as unknown as Prisma.InputJsonValue,
-        rawSummary: cardData.rawSummary,
-        accessToken,
-        expiresAt,
-      },
-    });
-
-    // Generate or update a Brief for this cycle (30-day access token)
-    const briefAccessToken = crypto.randomBytes(32).toString("hex");
-    const briefExpiresAt = new Date(context.now.getTime() + 30 * 24 * 60 * 60 * 1000);
-    const brief = await prisma.brief.upsert({
-      where: { cycleId: cycle.id },
-      update: {
-        diseaseCardId: diseaseCardRecord.id,
-        accessToken: briefAccessToken,
-        expiresAt: briefExpiresAt,
-      },
-      create: {
-        cycleId: cycle.id,
-        diseaseCardId: diseaseCardRecord.id,
-        webUrl: "", // updated below once we have the id
-        accessToken: briefAccessToken,
-        expiresAt: briefExpiresAt,
-      },
-    });
-    await prisma.brief.update({
-      where: { id: brief.id },
-      data: { webUrl: `/b/${brief.id}?t=${briefAccessToken}` },
-    });
-
-    // Send a follow-up message with the Brief link when the cycle is completing.
-    if (context.webBaseUrl) {
-      const briefUrl = `${context.webBaseUrl}/b/${brief.id}?t=${briefAccessToken}`;
-      const briefOutput: PlannerOutput = {
-        reasoning: "Brief generated. Sending link to patient.",
-        sessionObjective: "Share visit brief link with patient.",
-        nextAction: {
-          type: "generate_brief",
-          topic: "brief_ready",
-          purpose: "Your visit brief is ready.",
-          budgetCost: 0,
-        },
-        safetyFlag: "none",
-        updatePatientState: {},
-      };
-      const briefMessage = await renderMessage(userId, briefOutput, {
-        style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
-        locale: user.locale,
-        cycleContext: { briefUrl },
-      });
-      const { messages: safeBriefMessages } = safetyWrapWithSummary(userId, [briefMessage]);
-      await saveOutboundMessages(
-        prisma,
-        user.id,
-        safeBriefMessages,
-        cycle.id,
-        new Date(),
-        inboundEventId,
-        perception.traceId
-      );
-      messages.push(...safeBriefMessages);
-    }
-
-    // For 4-week plans that have reached ~28 days, or 7-day trials that have
-    // reached ~7 days, mark the cycle as COMPLETED. L5 has already generated
-    // the appropriate closing message via cycleContext.
-    const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-    if ((cycle.type === "PLAN_4_WEEK" && cycleDay >= 28) || (cycle.type === "TRIAL_7_DAY" && cycleDay >= 7)) {
-      await prisma.cycle.update({
-        where: { id: cycle.id },
-        data: { status: "COMPLETED", endedAt: context.now },
-      });
-    } else {
-      // Schedule the next check-in based on the user's A/B bucket (48h vs 72h) at 10:00 local time
-      const nextCheckinAt = scheduleNextCheckInOffset(userId, context.now);
-      await prisma.cycle.update({
-        where: { id: cycle.id },
-        data: { nextCheckinAt },
-      });
-    }
+    const style = (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1";
+    const briefMessages = await finalizeCheckInSession(
+      context,
+      user,
+      cycle,
+      activeCheckIn,
+      inboundEventId,
+      perception.traceId,
+      style,
+      activeCheckIn.inExceptionMode ? "EXCEPTION" : "COMPLETED"
+    );
+    messages.push(...briefMessages);
   }
 
   return {
