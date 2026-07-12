@@ -39,6 +39,7 @@
 | 待明确边界 | `docs/open-boundaries.md` | 对齐审查中发现的未决边界与遗漏核心能力 |
 | 策略研究文档 | `docs/carememorydiaglog.md` | 市场与疾病策略研究（非开发直接输入） |
 | Staging E2E 运行手册 | `docs/staging-e2e-runbook.md` | 在真实 staging（Render）上运行 E2E smoke 的配置与步骤 |
+| WhatsApp 模板文案与提交说明 | `docs/whatsapp-templates.md` | MVP 期间需提交 Meta 审核的 WhatsApp 模板文案、变量与合规要点 |
 | DDL 参考 | `docs/ddl.md` | 数据库 DDL 参考 |
 
 ---
