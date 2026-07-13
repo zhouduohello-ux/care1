@@ -1,6 +1,6 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { Prisma, type PrismaClient, type ObservationCategory } from "@carememory/db";
-import type { PlannerOutput, PerceptionResult } from "./types.js";
+import type { Observation, PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
 import { matchOptionSynonym, matchScaleWord, getLocale, type DialogueLocale } from "./dialogue-locales/index.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
@@ -333,6 +333,122 @@ Perception extracted observations: [{"concept":"activity_limitation","value":"ye
   }
 }
 
+export function detectTopicShift(
+  perception: PerceptionResult,
+  pending: PendingQuestion,
+  answerEvaluation: AnswerConfidenceResult
+): { isTopicShift: boolean; shiftedObservations: Observation[] } {
+  if (answerEvaluation.isAnswer) {
+    return { isTopicShift: false, shiftedObservations: [] };
+  }
+
+  const nonAnswerIntents = new Set([
+    "question",
+    "help",
+    "stop",
+    "delete_data",
+    "export_data",
+    "continue_cycle",
+    "initiate",
+    "correction",
+  ]);
+  if (nonAnswerIntents.has(perception.intent.primary)) {
+    return { isTopicShift: false, shiftedObservations: [] };
+  }
+
+  const nonInformativeConcepts = new Set([
+    "uncertainty",
+    "unknown",
+    "dont_know",
+    "not_sure",
+    "no_information",
+    "unsure",
+    "no_answer",
+  ]);
+
+  const shifted = perception.extractedObservations.filter(
+    (o) => o.concept !== pending.topic && !nonInformativeConcepts.has(o.concept)
+  );
+  if (shifted.length === 0) {
+    return { isTopicShift: false, shiftedObservations: [] };
+  }
+
+  return { isTopicShift: true, shiftedObservations: shifted };
+}
+
+export async function buildTopicShiftAcknowledgementMessage(
+  userId: string,
+  pending: PendingQuestion,
+  shiftedObservations: Observation[],
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const concepts = shiftedObservations.map((o) => String(o.concept).replace(/_/g, " "));
+  const uniqueConcepts = Array.from(new Set(concepts));
+  const conceptText = uniqueConcepts.join(", ");
+
+  const purpose = `Noted — thanks for mentioning ${conceptText}. I'll move on and come back to this if needed.`;
+
+  const acknowledgementOutput: PlannerOutput = {
+    reasoning: "User introduced a new topic instead of answering the pending question; acknowledging and moving on.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "inform",
+      topic: "topic_shift_acknowledgement",
+      purpose,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, acknowledgementOutput, options);
+}
+
+export async function recordTopicShift(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  shiftedObservations: Observation[],
+  eventId: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.observation.create({
+    data: {
+      userId,
+      cycleId,
+      eventId,
+      timestamp: now,
+      category: "subjective" as ObservationCategory,
+      concept: pending.topic,
+      value: "no_answer" as Prisma.InputJsonValue,
+      attributes: { reason: "topic_shift" } as Prisma.InputJsonValue,
+      confidence: 1,
+      extractedBy: "rule",
+    },
+  });
+
+  await clearPendingQuestion(prisma, checkInId);
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "user_action" as const,
+      payload: {
+        action: "topic_shift",
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+        shiftedConcepts: shiftedObservations.map((o) => o.concept),
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
+}
 export function classifyNonAnswer(perception: PerceptionResult): string {
   const nonAnswerIntents = new Set([
     "question",

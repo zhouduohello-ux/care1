@@ -1,0 +1,38 @@
+{
+  "id": "turn_manager_topic_shift",
+  "name": "Turn Manager handles topic shift",
+  "description": "When the user does not answer the pending question but introduces a new relevant observation, the system acknowledges the shift, records the pending question as no_answer, and continues to the next question.",
+  "user": {
+    "phoneNumber": "test_turn_topic_shift"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "I don't remember, but I used my reliever three times" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "observation",
+      "op": "exists",
+      "filter": { "concept": "reliever_use" },
+      "description": "System records the shifted reliever-use observation"
+    },
+    {
+      "afterStep": 4,
+      "type": "observation",
+      "op": "exists",
+      "filter": { "concept": "nighttime_symptoms", "value": "no_answer" },
+      "description": "System records a topic-shift no_answer for the pending question"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "Noted",
+      "caseInsensitive": true,
+      "description": "System acknowledges the topic shift"
+    }
+  ]
+}

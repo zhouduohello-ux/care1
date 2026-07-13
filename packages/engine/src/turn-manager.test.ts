@@ -29,6 +29,9 @@ import {
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
+  detectTopicShift,
+  buildTopicShiftAcknowledgementMessage,
+  recordTopicShift,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -889,5 +892,117 @@ describe("getSessionTurnBudget", () => {
     expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
     process.env.SESSION_TURN_BUDGET = "1.5";
     expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
+  });
+});
+
+describe("detectTopicShift", () => {
+  const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0", "reliever_1"], askedAt: "" };
+
+  it("returns false when the reply answers the pending question", () => {
+    const perception = makePerception({
+      extractedObservations: [{ category: "medication", concept: "reliever_use", value: "reliever_1", confidence: 1, extractedBy: "rule" }],
+    });
+    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "once" }), perception, pending, "en-GB");
+    const result = detectTopicShift(perception, pending, evaluation);
+    expect(result.isTopicShift).toBe(false);
+    expect(result.shiftedObservations).toEqual([]);
+  });
+
+  it("returns false for non-answer intents", () => {
+    const perception = makePerception({
+      intent: { primary: "question", confidence: 1 },
+      extractedObservations: [{ category: "subjective", concept: "trigger", value: "pollen", confidence: 1, extractedBy: "rule" }],
+    });
+    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "What do you mean?" }), perception, pending);
+    const result = detectTopicShift(perception, pending, evaluation);
+    expect(result.isTopicShift).toBe(false);
+  });
+
+  it("does not treat vague uncertainty as a topic shift", () => {
+    const perception = makePerception({
+      extractedObservations: [{ category: "subjective", concept: "uncertainty", value: "not sure", confidence: 1, extractedBy: "rule" }],
+    });
+    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "not sure" }), perception, pending, "en-GB");
+    const result = detectTopicShift(perception, pending, evaluation);
+    expect(result.isTopicShift).toBe(false);
+  });
+
+  it("detects a shift when the user introduces a different observation", () => {
+    const perception = makePerception({
+      extractedObservations: [{ category: "symptom", concept: "nighttime_symptoms", value: "yes", confidence: 1, extractedBy: "rule" }],
+    });
+    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "I wheezed last night" }), perception, pending, "en-GB");
+    const result = detectTopicShift(perception, pending, evaluation);
+    expect(result.isTopicShift).toBe(true);
+    expect(result.shiftedObservations).toHaveLength(1);
+    expect(result.shiftedObservations[0].concept).toBe("nighttime_symptoms");
+  });
+});
+
+describe("buildTopicShiftAcknowledgementMessage", () => {
+  it("acknowledges the shifted concepts and moves on", async () => {
+    const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
+    const shifted = [{ category: "symptom" as const, concept: "nighttime_symptoms", value: "yes", confidence: 1, extractedBy: "rule" as const }];
+    const message = await buildTopicShiftAcknowledgementMessage("user_1", pending, shifted, { style: "v1", locale: "en-GB" });
+    expect(message.content.type).toBe("text");
+    expect(message.content.text).toContain("nighttime symptoms");
+    expect(message.content.text).toContain("move on");
+  });
+});
+
+describe("recordTopicShift", () => {
+  it("records no_answer for the pending question, clears pending, and writes a user_action event", async () => {
+    const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
+    const observationCreate = vi.fn().mockResolvedValue(undefined);
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      observation: { create: observationCreate },
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordTopicShift(
+      prisma,
+      "user_1",
+      "cycle_1",
+      "checkin_1",
+      pending,
+      [{ category: "symptom" as const, concept: "nighttime_symptoms", value: "yes", confidence: 1, extractedBy: "rule" as const }],
+      "event_1",
+      new Date("2026-07-11T00:00:00Z"),
+      "trace_1"
+    );
+
+    expect(observationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          eventId: "event_1",
+          category: "subjective",
+          concept: "reliever_use",
+          value: "no_answer",
+          attributes: { reason: "topic_shift" },
+        }),
+      })
+    );
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "user_action",
+          traceId: "trace_1",
+        }),
+      })
+    );
   });
 });
