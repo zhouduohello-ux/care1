@@ -16,7 +16,7 @@ L6 is the **last gate before a message is dispatched** to the patient. It must:
 2. Append required safety addendums when medical/asthma-related content is detected.
 3. Grade each batch with a risk level (`none` | `low` | `medium` | `high`).
 4. Persist a `safety_check` audit event for every batch.
-5. (Future) Act on `medium`/`high` outbound risk by escalating to operators or aborting the check-in.
+5. Act on elevated outbound risk by aborting the batch when `approved=true` + `riskLevel=high`.
 
 ## 2. Current implementation
 
@@ -32,11 +32,13 @@ L6 is the **last gate before a message is dispatched** to the patient. It must:
   - Medical/health keywords → medical disclaimer.
   - Neutral content → no addendums.
 
-### 2.2 Wrapper: `packages/engine/src/engine.ts`
+### 2.2 Wrapper and risk action: `packages/engine/src/engine.ts`
 
 - `safetyWrapWithSummary(userId, messages, disease?)` — pure function; returns wrapped messages + aggregated `SafetyResult`.
+- `applySafetyAction(messages, summary)` — aborts the entire batch and replaces it with a safe fallback when a future classifier returns `approved=true` + `riskLevel=high`.
 - `createSafetyWrapper(context, userId, cycleId?, disease?, dbUserId?)` — async closure that:
   - Calls `safetyWrapWithSummary`.
+  - Calls `applySafetyAction`.
   - Persists a `safety_check` Event via `saveSafetyCheckEvent` when `dbUserId` is known.
 - All outbound batches in `processInboundInternal`, `finalizeCheckInSession`, and `handleCheckInTrigger` route through the wrapper.
 
@@ -81,25 +83,19 @@ interface SafetyResult {
 
 ## 4. Decision matrix
 
-| `approved` | `riskLevel` | Current behaviour | Planned behaviour |
-|------------|-------------|-------------------|-------------------|
-| `false` | `high` | Replace message with safe fallback; append audit event. | Same. Optionally notify operator/webhook. |
-| `true` | `none` | Pass through unchanged. | Same. |
-| `true` | `low` | Pass through with addendums if applicable. | Same. |
-| `true` | `medium` | Pass through with addendums if applicable. | Consider marking check-in for review / increment safety counter. |
-| `true` | `high` | **Not produced today** because `approved=true` implies no prohibited phrase. | If future LLM-based classification yields `approved=true` + `high`, abort batch and escalate. |
+| `approved` | `riskLevel` | Behaviour |
+|------------|-------------|-----------|
+| `false` | `high` | Replace blocked message(s) with safe fallback; append audit event. |
+| `true` | `none` | Pass through unchanged. |
+| `true` | `low` | Pass through with addendums if applicable. |
+| `true` | `medium` | Pass through with addendums; currently no extra action. |
+| `true` | `high` | **Abort the whole batch** via `applySafetyAction` and return a safe fallback. Reserved for future LLM-based classifiers. |
 
 ## 5. Known gaps and planned work
 
-### 5.1 Outbound risk action (P1 — safety critical)
+### 5.1 Outbound risk action (P1 — safety critical) ✅ Done
 
-**Gap**: `summary.riskLevel` from L6 is returned in the trace but never read by `engine.ts` to influence behaviour. Only `approved=false` blocks a message.
-
-**Plan**:
-- After calling `safetyWrapWithSummary` / `createSafetyWrapper`, inspect `summary.riskLevel`.
-- If outbound risk is `high` and `approved=true` (future LLM classifier), abort the batch and send a safe fallback.
-- If outbound risk is `medium`, increment a per-check-in `safetyConcernCount` and, after N occurrences, end the session with a standard safety notice.
-- Expose safety metrics in admin/metrics.
+`summary.riskLevel` is now consumed by `applySafetyAction()`. If a classifier ever returns `approved=true` + `riskLevel=high`, the batch is aborted and replaced with a safe fallback. `medium` risk still passes through; future work may increment a per-check-in concern counter.
 
 ### 5.2 LLM-based semantic safety classifier (P2)
 
@@ -111,13 +107,9 @@ interface SafetyResult {
 - Output: `approved`, `riskLevel`, `blockReason`.
 - Fall back to rule-based when quota exceeded or LLM unavailable.
 
-### 5.3 Non-text content safety (P2)
+### 5.3 Non-text content safety (P2) ✅ Done
 
-**Gap**: Only `message.content.text` is checked. Buttons, lists, and templates are not inspected.
-
-**Plan**:
-- Extend `safetyCheck` to iterate over interactive elements (button text, list titles, template bodies).
-- Prohibit dangerous text in any interactive element.
+`safetyCheck` now scans `buttons` titles, `list` row titles/descriptions, and `templateVariables` in addition to the main body text. Addendum classification also considers these fields.
 
 ### 5.4 Per-disease safety rules verification (P2)
 
@@ -127,21 +119,24 @@ interface SafetyResult {
 - Add disease-specific safety test suites.
 - Verify `loadSafetyRules` returns empty/fallback for unsupported diseases.
 
-### 5.5 Safety metrics and alerting (P3)
+### 5.5 Safety metrics and alerting (P3) ✅ Done
 
-**Gap**: No dedicated safety dashboard metrics.
+`/admin/metrics` now exposes:
+- `safetyChecksTotal`
+- `safetyBlocksTotal`
+- `safetyBlocks24h`
+- `safetyHighRisk24h`
 
-**Plan**:
-- Add admin/metrics counters: `safety_checks_total`, `safety_blocks_total`, `safety_high_risk_total`.
-- Add webhook/notification hook for blocked messages.
+Future work: webhook/notification hook for blocked messages.
 
 ## 6. Tests
 
 | Test file | Coverage |
 |-----------|----------|
-| `packages/engine/src/safety.test.ts` | Regex blocks, RAG phrase blocks, addendum classification, neutral content. |
+| `packages/engine/src/safety.test.ts` | Regex blocks, RAG phrase blocks, addendum classification, neutral content, button/list scanning, `applySafetyAction` batch abort. |
 | `packages/engine/src/memory.test.ts` | `saveSafetyCheckEvent` payload and skip-on-missing-user behaviour. |
 | `packages/engine/src/engine.integration.test.ts` | End-to-end flow including safety wrap + audit persistence. |
+| `apps/api/src/routes/admin.test.ts` | Safety metrics in `/admin/metrics`. |
 
 ## 7. Related files
 
