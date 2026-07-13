@@ -1462,6 +1462,61 @@ export async function buildRepeatMessage(
 
   return renderMessage(userId, output, options);
   return renderMessage(userId, repeatOutput, options);
+const NOT_APPLICABLE_PATTERNS = [
+  /^n\/a$/i,
+  /^not applicable$/i,
+  /^doesn't apply$/i,
+  /^does not apply$/i,
+  /^not relevant$/i,
+  /^not applicable to me$/i,
+];
+
+export function looksLikeNotApplicableRequest(text: string): boolean {
+  return NOT_APPLICABLE_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function recordNotApplicableQuestion(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  eventId: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.observation.create({
+    data: {
+      userId,
+      cycleId,
+      eventId,
+      timestamp: now,
+      category: "subjective" as ObservationCategory,
+      concept: pending.topic,
+      value: "no_answer" as Prisma.InputJsonValue,
+      attributes: { reason: "not_applicable" } as Prisma.InputJsonValue,
+      confidence: 1,
+      extractedBy: "rule",
+    },
+  });
+
+  await clearPendingQuestion(prisma, checkInId);
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "user_action" as const,
+      payload: {
+        action: "not_applicable_question",
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
 }
 
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {
