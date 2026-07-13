@@ -386,7 +386,8 @@ pending question 的 gentle nudge、静默超时、重提示上限与 LLM fallba
 | 环境变量 | 默认值 | 说明 |
 |---|---|---|
 | `PENDING_QUESTION_NUDGE_AFTER_MS` | `43200000`（12h） | 发出 check-in 后多久发送 gentle nudge |
-| `PENDING_QUESTION_TIMEOUT_MS` | `86400000`（24h） | 发出 check-in 后多久未回复则记录 `no_answer` |
+| `PENDING_QUESTION_TIMEOUT_MS` | `86400000`（24h） | 发出 check-in 后多久未回复则触发 timeout 处理 |
+| `PENDING_QUESTION_TIMEOUT_DEFERS` | `true` | 超时后是否将问题延迟到下一次 check-in（`false` 则记录 `no_answer`） |
 | `PENDING_QUESTION_MAX_REPROMPTS` | `2` | 答非所问时最多重提示几次 |
 | `LLM_ANSWER_RELEVANCE_THRESHOLD` | `0.7` | Turn Manager LLM fallback 接受自然语言回复的最低置信度（0–1） |
 
