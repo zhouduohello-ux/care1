@@ -1,4 +1,5 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
+import { DEFAULT_PLATFORM_CAPABILITIES } from "@carememory/im-core";
 import { generateDiseaseCard } from "@carememory/disease-card";
 import { Prisma } from "@carememory/db";
 import type { Cycle, User, CheckIn } from "@carememory/db";
@@ -8,6 +9,7 @@ import { perceive } from "./perception.js";
 import { safetyCheck } from "./safety.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
+import { combineAdjacentTextMessages } from "./message-batching.js";
 import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
@@ -325,6 +327,19 @@ export async function handleInbound(
 }
 
 export async function processInbound(
+  context: EngineContext,
+  message: InboundMessage
+): Promise<{ messages: OutboundMessage[]; trace: EngineTrace }> {
+  const result = await processInboundInternal(context, message);
+  return {
+    ...result,
+    messages: combineAdjacentTextMessages(result.messages, {
+      maxBodyLength: DEFAULT_PLATFORM_CAPABILITIES.whatsapp.maxBodyLength,
+    }),
+  };
+}
+
+async function processInboundInternal(
   context: EngineContext,
   message: InboundMessage
 ): Promise<{ messages: OutboundMessage[]; trace: EngineTrace }> {
@@ -1575,5 +1590,7 @@ export async function handleCheckInTrigger(
     data: { nextCheckinAt },
   });
 
-  return messages;
+  return combineAdjacentTextMessages(messages, {
+    maxBodyLength: DEFAULT_PLATFORM_CAPABILITIES.whatsapp.maxBodyLength,
+  });
 }

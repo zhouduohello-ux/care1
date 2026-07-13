@@ -1,0 +1,39 @@
+{
+  "id": "message_batching",
+  "name": "L5 message batching reduces adjacent text messages",
+  "description": "When a severe symptom ends a check-in and the engine appends a Brief link, L5 batches the two adjacent text messages into one outbound message.",
+  "user": {
+    "phoneNumber": "test_message_batching"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "send", "text": "I can't breathe and my chest is tight" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message_type",
+      "op": "eq",
+      "value": "text",
+      "description": "Adjacent text messages are batched into a single text message"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "999",
+      "description": "Batched message still contains urgent safety guidance"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "brief",
+      "caseInsensitive": true,
+      "description": "Batched message also contains the brief link"
+    }
+  ]
+}
