@@ -1413,6 +1413,24 @@ export function resolveSameAsBeforeValue(
 }
 
 export async function buildSameAsBeforeMessage(
+const REPEAT_PATTERNS = [
+  /^repeat$/i,
+  /^say that again$/i,
+  /^say again$/i,
+  /^repeat the question$/i,
+  /^can you repeat/i,
+  /^could you repeat/i,
+  /^please repeat/i,
+  /^rephrase$/i,
+  /^reword it$/i,
+  /^word it differently$/i,
+];
+
+export function looksLikeRepeatRequest(text: string): boolean {
+  return REPEAT_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function buildRepeatMessage(
   userId: string,
   pending: PendingQuestion,
   options: RenderOptions
@@ -1427,6 +1445,15 @@ export async function buildSameAsBeforeMessage(
       type: "inform",
       topic: pending.topic,
       purpose: text,
+  const repeatOutput: PlannerOutput = {
+    reasoning: "User asked to repeat the pending question.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: pending.purpose,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
       budgetCost: 0,
     },
     safetyFlag: "none",
@@ -1434,6 +1461,7 @@ export async function buildSameAsBeforeMessage(
   };
 
   return renderMessage(userId, output, options);
+  return renderMessage(userId, repeatOutput, options);
 }
 
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {

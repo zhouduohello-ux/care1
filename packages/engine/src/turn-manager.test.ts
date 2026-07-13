@@ -19,6 +19,8 @@ import {
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
+  looksLikeRepeatRequest,
+  buildRepeatMessage,
   classifyNonAnswer,
   getTurnState,
   recordReprompt,
@@ -1214,6 +1216,34 @@ describe("same-as-before handling", () => {
       expect(message.content.text).toContain("carry over");
       expect(message.content.text).toContain("How often did you use your reliever inhaler");
     });
+describe("repeat request handling", () => {
+  it.each([
+    ["repeat", true],
+    ["Say that again", true],
+    ["say again", true],
+    ["repeat the question", true],
+    ["can you repeat that?", true],
+    ["please repeat", true],
+    ["rephrase", true],
+    ["word it differently", true],
+    ["none", false],
+    ["skip", false],
+    ["I don't understand", false],
+  ])("detects '%s' as repeat request: %s", (text, expected) => {
+    expect(looksLikeRepeatRequest(text)).toBe(expected);
+  });
+
+  it("renders the pending question again as a repeat", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1", "reliever_2", "reliever_3_plus"],
+      askedAt: "",
+    };
+    const message = await buildRepeatMessage("user_1", pending, { style: "v1", locale: "en-GB" });
+    expect(message.content.type).toBe("list");
+    expect(message.content.text).toContain("How often did you use your reliever?");
   });
 });
 

@@ -51,6 +51,8 @@
     "test:e2e:message-batching": "tsx tests/scenarios/run-scenario.ts tests/scenarios/message-batching.json"
     "test:e2e:multi-turn-clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-multi-turn-clarification.json",
     "test:e2e:same-as-before": "tsx tests/scenarios/run-scenario.ts tests/scenarios/same-as-before.json"
+    "test:e2e:multi-turn-clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-multi-turn-clarification.json",
+    "test:e2e:repeat-request": "tsx tests/scenarios/run-scenario.ts tests/scenarios/repeat-request.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
