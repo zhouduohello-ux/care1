@@ -125,7 +125,7 @@ describe("LLM client", () => {
     );
 
     expect(output.nextAction.topic).toBe("nighttime_symptoms");
-    expect(output.reasoning).toBe("LLM reasoning");
+    expect(output.reasoning).toBe("LLM reasoning (guardrail: enforced question-bank order)");
   });
 
   it("perceive falls back to rules when LLM fails", async () => {

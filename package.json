@@ -43,7 +43,8 @@
     "test:e2e:same-as-before": "tsx tests/scenarios/run-scenario.ts tests/scenarios/same-as-before.json",
     "test:e2e:repeat-request": "tsx tests/scenarios/run-scenario.ts tests/scenarios/repeat-request.json",
     "test:e2e:not-applicable": "tsx tests/scenarios/run-scenario.ts tests/scenarios/not-applicable-request.json",
-    "test:e2e:staging": "tsx tests/scenarios/run-all.ts",
+    "test:e2e:staging": "E2E_SCENARIO_DELAY_MS=0 E2E_STEP_DELAY_MS=0 tsx tests/scenarios/run-all.ts tests/scenarios/controlled-asthma-short.json tests/scenarios/exception-mode-short.json tests/scenarios/deferred-question-cross-checkin.json tests/scenarios/pending-question-timeout.json tests/scenarios/same-as-before.json tests/scenarios/severe-symptom-immediate-end.json tests/scenarios/message-batching.json tests/scenarios/brief-pdf-e2e.json",
+    "test:e2e:staging:full": "tsx tests/scenarios/run-all.ts",
     "corpus:reindex": "pnpm --filter @carememory/rag corpus:reindex",
     "typecheck": "turbo run typecheck"
   },
