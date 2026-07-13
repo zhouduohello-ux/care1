@@ -111,7 +111,7 @@ interface SafetyResult {
 
 **Future tuning**:
 - A/B test classifier vs. rule-only to measure block rate and false-positive rate.
-- Cache classifier results per message text to reduce LLM cost.
+- ✅ Cache classifier results per message text to reduce LLM cost. Implemented in `packages/engine/src/safety-llm.ts` with an in-memory TTL cache keyed by message texts + disease + RAG rules. Configurable via `SAFETY_LLM_CACHE_TTL_MS` and `SAFETY_LLM_CACHE_MAX_ENTRIES`.
 
 ### 5.3 Non-text content safety (P2) ✅ Done
 

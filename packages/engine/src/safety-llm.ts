@@ -2,6 +2,7 @@ import type { OutboundMessage } from "@carememory/im-core";
 import type { LLMClient, LLMMessage } from "./llm.js";
 import type { SafetyResult } from "./types.js";
 import type { SafetyRuleSet } from "@carememory/rag";
+import crypto from "node:crypto";
 
 const SAFETY_SYSTEM_PROMPT = `You are the safety classifier for CareMemory, a UK health-record assistant that communicates with patients via WhatsApp.
 
@@ -89,15 +90,95 @@ function parseLlmSafetyResponse(content: string): SafetyResult {
   return { approved, riskLevel, requiredAddendums: [], blockReason };
 }
 
+// ── In-memory result cache ─────────────────────────────────────────────
+// Caching classifier results avoids repeated LLM calls for identical outbound
+// batches (common for system/fallback messages) and keeps the safety gate fast.
+
+const DEFAULT_CACHE_TTL_MS = 5 * 60 * 1000;
+const DEFAULT_MAX_ENTRIES = 1000;
+
+interface CacheEntry {
+  result: SafetyResult;
+  expiresAt: number;
+}
+
+const resultCache = new Map<string, CacheEntry>();
+
+function parseCacheTtlMs(): number {
+  const raw = process.env.SAFETY_LLM_CACHE_TTL_MS;
+  if (!raw) return DEFAULT_CACHE_TTL_MS;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed) || parsed < 0) {
+    console.warn(`[safety-llm] Invalid SAFETY_LLM_CACHE_TTL_MS="${raw}"; using fallback ${DEFAULT_CACHE_TTL_MS}`);
+    return DEFAULT_CACHE_TTL_MS;
+  }
+  return parsed;
+}
+
+function parseMaxCacheEntries(): number {
+  const raw = process.env.SAFETY_LLM_CACHE_MAX_ENTRIES;
+  if (!raw) return DEFAULT_MAX_ENTRIES;
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed) || parsed < 1 || !Number.isInteger(parsed)) {
+    console.warn(`[safety-llm] Invalid SAFETY_LLM_CACHE_MAX_ENTRIES="${raw}"; using fallback ${DEFAULT_MAX_ENTRIES}`);
+    return DEFAULT_MAX_ENTRIES;
+  }
+  return parsed;
+}
+
+function buildCacheKey(input: LlmSafetyCheckInput): string {
+  const payload = JSON.stringify({
+    disease: input.disease,
+    texts: extractAllTexts(input.messages),
+    prohibitedPhrases: input.rules?.prohibitedPhrases ?? [],
+    requiredAddendums: input.rules?.requiredAddendums ?? [],
+  });
+  return crypto.createHash("sha256").update(payload).digest("hex");
+}
+
+function getCachedResult(key: string): SafetyResult | undefined {
+  const entry = resultCache.get(key);
+  if (!entry) return undefined;
+  if (Date.now() > entry.expiresAt) {
+    resultCache.delete(key);
+    return undefined;
+  }
+  return entry.result;
+}
+
+function setCachedResult(key: string, result: SafetyResult): void {
+  const maxEntries = parseMaxCacheEntries();
+  if (resultCache.size >= maxEntries) {
+    const oldest = resultCache.keys().next().value;
+    if (oldest !== undefined) {
+      resultCache.delete(oldest);
+    }
+  }
+  resultCache.set(key, { result, expiresAt: Date.now() + parseCacheTtlMs() });
+}
+
+/** Clear the classifier result cache. Exported for tests. */
+export function clearSafetyLlmCache(): void {
+  resultCache.clear();
+}
+
 export async function llmSafetyCheckAsync(
   input: LlmSafetyCheckInput,
   llmClient: LLMClient
 ): Promise<SafetyResult> {
+  const key = buildCacheKey(input);
+  const cached = getCachedResult(key);
+  if (cached) {
+    return cached;
+  }
+
   const messages: LLMMessage[] = [
     { role: "system", content: SAFETY_SYSTEM_PROMPT },
     { role: "user", content: buildUserPrompt(input) },
   ];
 
   const { content } = await llmClient.complete(messages, { temperature: 0.1, responseFormat: "json" });
-  return parseLlmSafetyResponse(content);
+  const result = parseLlmSafetyResponse(content);
+  setCachedResult(key, result);
+  return result;
 }
