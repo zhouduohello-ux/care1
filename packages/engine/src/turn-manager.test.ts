@@ -13,6 +13,8 @@ import {
   looksLikeClarificationRequest,
   looksLikeSkipRequest,
   recordSkippedQuestion,
+  looksLikeNotApplicableRequest,
+  recordNotApplicableQuestion,
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
@@ -858,6 +860,84 @@ describe("buildPartialAnswerFollowUpMessage", () => {
     });
     expect(message.content.type).toBe("text");
     expect(message.content.text).toContain("anything else");
+  });
+});
+
+describe("not-applicable request handling", () => {
+  it.each([
+    ["n/a", true],
+    ["N/A", true],
+    ["not applicable", true],
+    ["doesn't apply", true],
+    ["does not apply", true],
+    ["not relevant", true],
+    ["skip", false],
+    ["same", false],
+    ["none", false],
+  ])("detects '%s' as not-applicable: %s", (text, expected) => {
+    expect(looksLikeNotApplicableRequest(text)).toBe(expected);
+  });
+
+  it("records no_answer with reason not_applicable and writes user_action event", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const observationCreate = vi.fn().mockResolvedValue(undefined);
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      observation: { create: observationCreate },
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordNotApplicableQuestion(
+      prisma,
+      "user_1",
+      "cycle_1",
+      "checkin_1",
+      pending,
+      "event_1",
+      new Date("2026-07-11T00:00:00Z"),
+      "trace_1"
+    );
+
+    expect(observationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          eventId: "event_1",
+          category: "subjective",
+          concept: "reliever_use",
+          value: "no_answer",
+          attributes: { reason: "not_applicable" },
+          extractedBy: "rule",
+        }),
+      })
+    );
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "user_action",
+          payload: expect.objectContaining({ action: "not_applicable_question", topic: "reliever_use" }),
+          traceId: "trace_1",
+        }),
+      })
+    );
   });
 });
 

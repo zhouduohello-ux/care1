@@ -20,6 +20,8 @@ import {
   looksLikeClarificationRequest,
   looksLikeSkipRequest,
   recordSkippedQuestion,
+  looksLikeNotApplicableRequest,
+  recordNotApplicableQuestion,
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
@@ -979,6 +981,21 @@ export async function processInbound(
             // Record a no_answer observation, clear the pending question, and let
             // the planner move on to the next topic.
             await recordSkippedQuestion(
+              prisma,
+              user.id,
+              cycle.id,
+              activeCheckIn.id,
+              pending,
+              inboundEventId,
+              context.now,
+              perception.traceId
+            );
+            // Fall through to L4 Planner so it can ask the next question.
+          } else if (looksLikeNotApplicableRequest(perception.rawText)) {
+            // Not-applicable request: the user indicates the question doesn't
+            // apply to them. Record a distinct no_answer reason so analytics can
+            // tell it apart from a skipped or unanswered question.
+            await recordNotApplicableQuestion(
               prisma,
               user.id,
               cycle.id,
