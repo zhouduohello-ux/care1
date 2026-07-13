@@ -420,12 +420,13 @@
 
 ## D25. Pending question 超时、nudge、审计与可配置时间
 
-**决策**：pending question 在发出后 12h 发送一次 gentle nudge，24h 未回复则静默超时记录 `no_answer`；nudge / timeout 时间可通过环境变量配置，所有关键动作写入 Event 审计。
+**决策**：pending question 在发出后 12h 发送一次 gentle nudge，24h 未回复则静默超时；默认将超时问题延迟（defer）到下一次 check-in，而不是直接记录 `no_answer`；nudge / timeout 时间可通过环境变量配置，所有关键动作写入 Event 审计。
 
 **边界**：
 - `CheckIn` 新增 `nudgeSentAt`；`EventType` 新增 `nudge_sent`；
 - scheduler 新增 `scan-pending-nudge` 与 `scan-expired-pending` repeatable job；
 - 环境变量 `PENDING_QUESTION_NUDGE_AFTER_MS`（默认 12h）与 `PENDING_QUESTION_TIMEOUT_MS`（默认 24h）控制时间；
+- 环境变量 `PENDING_QUESTION_TIMEOUT_DEFERS`（默认 `true`）控制超时后是 defer 到下一次 check-in 还是记录 `no_answer`；
 - 非法环境值自动回退到默认值；
 - 超时后不发送消息，仅更新 DB 状态并写入 `state_updated` Event。
 

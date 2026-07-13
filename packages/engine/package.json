@@ -17,7 +17,7 @@
     "build": "tsup src/index.ts --format cjs,esm --dts --external @carememory/disease-card --external @carememory/rag --clean",
     "dev": "tsup src/index.ts --format cjs,esm --dts --watch",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "dotenv -e ../../.env -- vitest run"
   },
   "dependencies": {
     "@carememory/db": "workspace:*",
