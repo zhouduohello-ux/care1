@@ -68,6 +68,8 @@ function makePrismaStub() {
             if (payload.equals === "skip_question") return 4;
             if (payload.equals === "go_back") return 2;
             if (payload.equals === "topic_shift") return 1;
+            if (payload.equals === "topic_shift") return 3;
+            if (payload.equals === "deferred_question_reraised") return 1;
           }
           return 6;
         }
@@ -181,6 +183,8 @@ describe("admin routes", () => {
       skips24h: 4,
       goBacks24h: 2,
       topicShifts24h: 1,
+      topicShifts24h: 3,
+      deferredQuestionsReRaised24h: 1,
       answerConfidence: {
         avg24h: 0.8,
         buckets24h: { low: 0, medium: 1, high: 2, unknown: 1 },
