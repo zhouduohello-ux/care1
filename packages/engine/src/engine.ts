@@ -6,7 +6,8 @@ import type { Cycle, User, CheckIn } from "@carememory/db";
 import crypto from "node:crypto";
 import type { EngineContext, EngineTrace, LlmModelType, PlannerOutput, SafetyResult } from "./types.js";
 import { perceive } from "./perception.js";
-import { safetyCheck, applySafetyAction } from "./safety.js";
+import { safetyCheck, applySafetyAction, SAFETY_FALLBACK_TEXT, loadSafetyRulesForDisease } from "./safety.js";
+import { llmSafetyCheckAsync } from "./safety-llm.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
 import { combineAdjacentTextMessages } from "./message-batching.js";
@@ -164,12 +165,13 @@ async function finalizeCheckInSession(
   inboundEventId: string,
   traceId: string | undefined,
   style: "v1" | "v2",
-  status: "COMPLETED" | "EXCEPTION"
+  status: "COMPLETED" | "EXCEPTION",
+  allowLlm = false
 ): Promise<OutboundMessage[]> {
   const prisma = context.prisma;
   const userId = user.phoneNumber;
 
-  const safety = createSafetyWrapper(context, userId, cycle.id, cycle.disease ?? "asthma", user.id);
+  const safety = createSafetyWrapper(context, userId, cycle.id, cycle.disease ?? "asthma", user.id, allowLlm);
 
   await prisma.checkIn.update({
     where: { id: activeCheckIn.id },
@@ -345,11 +347,37 @@ function createSafetyWrapper(
   userId: string,
   cycleId?: string,
   disease?: string,
-  dbUserId?: string
+  dbUserId?: string,
+  allowLlm = false
 ) {
   return async (messages: OutboundMessage[], traceId?: string, checkInId?: string) => {
     let wrapped = safetyWrapWithSummary(userId, messages, disease);
     wrapped = applySafetyAction(wrapped.messages, wrapped.summary);
+
+    // Optional LLM semantic classifier for paraphrased unsafe advice.
+    if (wrapped.summary.approved && allowLlm) {
+      const llmClient = resolveLlmClient(context, "safety");
+      if (llmClient) {
+        try {
+          const rules = loadSafetyRulesForDisease(disease ?? "asthma");
+          const llmResult = await llmSafetyCheckAsync({ messages, disease, rules }, llmClient);
+          if (!llmResult.approved || llmResult.riskLevel === "high") {
+            wrapped.summary = {
+              ...wrapped.summary,
+              approved: false,
+              riskLevel: "high",
+              blockReason: llmResult.blockReason ?? "LLM safety classifier flagged the message",
+            };
+            wrapped = applySafetyAction(wrapped.messages, wrapped.summary);
+          }
+        } catch (err) {
+          console.warn("[safety] LLM classifier failed; falling back to rule-based result", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    }
+
     if (dbUserId) {
       await saveSafetyCheckEvent(context.prisma, dbUserId, wrapped.summary, messages, traceId, cycleId, checkInId);
     }
@@ -425,7 +453,8 @@ async function processInboundInternal(
     userId,
     cycle?.id,
     cycle?.disease ?? "asthma",
-    user?.id
+    user?.id,
+    allowLlm
   );
 
   // Resolve check-in context before perception so L1 can use session awareness.
@@ -821,7 +850,7 @@ async function processInboundInternal(
       );
       const style = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
       const briefMessages = await finalizeCheckInSession(
-        context, user, cycle, activeCheckIn, inboundEventId, perception.traceId, style, "EXCEPTION"
+        context, user, cycle, activeCheckIn, inboundEventId, perception.traceId, style, "EXCEPTION", allowLlm
       );
       messages.push(...briefMessages);
     }
@@ -1699,7 +1728,8 @@ async function processInboundInternal(
       inboundEventId,
       perception.traceId,
       style,
-      activeCheckIn.inExceptionMode ? "EXCEPTION" : "COMPLETED"
+      activeCheckIn.inExceptionMode ? "EXCEPTION" : "COMPLETED",
+      allowLlm
     );
     messages.push(...briefMessages);
   }
@@ -1732,9 +1762,9 @@ export async function handleCheckInTrigger(
     await incrementLlmQuota(context.quotaStore, cycle.userId, context.now);
   };
 
-  const safety = createSafetyWrapper(context, cycle.user.phoneNumber, cycle.id, cycle.disease ?? "asthma", cycle.userId);
-
   const allowLlm = await hasLlmQuota(context.quotaStore, cycle.userId, context.now);
+
+  const safety = createSafetyWrapper(context, cycle.user.phoneNumber, cycle.id, cycle.disease ?? "asthma", cycle.userId, allowLlm);
 
   // Do not create a new check-in if one is already active/unsanswered for this cycle.
   const existingActiveCheckIn = await prisma.checkIn.findFirst({
