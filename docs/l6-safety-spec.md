@@ -1,6 +1,6 @@
 # L6 Safety & Compliance Layer Specification
 
-> Version: 1.1  
+> Version: 1.2  
 > Scope: outbound message safety checking, addendum injection, audit, and risk escalation.  
 > Disease: asthma (MVP); designed to be disease-agnostic where noted.  
 > Last updated: 2026-07-13
@@ -174,5 +174,6 @@ Blocked-message alerting is implemented in `packages/engine/src/safety-alert.ts`
 
 | Date | Version | Changes | Author |
 |---|---|---|---|
+| 2026-07-13 | 1.2 | L6 tuning: add `except` override to rule-based prohibited patterns (e.g., allow dosing questions like "How many puffs did you take?" while still blocking instructions like "Take 2 puffs"); add few-shot examples to LLM safety classifier system prompt to reduce false positives. | AI Agent |
 | 2026-07-13 | 1.1 | Sync with PR #76: confirmed rule-based checker scans buttons/list/templateVariables; confirmed `mediumRiskCount` is persisted on `CheckIn` and included in `safety_check` audit events; confirmed A/B experiment variant is recorded in audit events; added `safety-alert.ts` to related files. | AI Agent |
 | 2026-07-12 | 1.0 | Initial specification covering rule checker, LLM classifier, risk actions, audit events, metrics, and alerting. | AI Agent |
