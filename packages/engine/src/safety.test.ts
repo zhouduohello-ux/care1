@@ -117,3 +117,18 @@ describe("applySafetyAction", () => {
     expect(result.summary).toEqual(summary);
   });
 });
+
+describe("safetyCheck for unknown disease", () => {
+  it("uses fallback disclaimers", () => {
+    const result = safetyCheck(makeMessage("Please tell your doctor about your breathing today."), "unknown-disease");
+    expect(result.approved).toBe(true);
+    expect(result.requiredAddendums.some((a) => a.includes("999"))).toBe(true);
+    expect(result.requiredAddendums.some((a) => a.includes("not medical advice"))).toBe(true);
+  });
+
+  it("still blocks hard-coded prohibited patterns", () => {
+    const result = safetyCheck(makeMessage("You should increase your inhaler dose."), "unknown-disease");
+    expect(result.approved).toBe(false);
+    expect(result.riskLevel).toBe("high");
+  });
+});
