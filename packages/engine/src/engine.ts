@@ -65,6 +65,7 @@ import {
   savePerceptionEvent,
   savePlannerEvent,
   saveLlmCallEvent,
+  saveSafetyCheckEvent,
   getRecentObservations,
   deleteUserData,
   supersedePreviousObservations,
@@ -168,6 +169,8 @@ async function finalizeCheckInSession(
   const prisma = context.prisma;
   const userId = user.phoneNumber;
 
+  const safety = createSafetyWrapper(context, userId, cycle.id, cycle.disease ?? "asthma", user.id);
+
   await prisma.checkIn.update({
     where: { id: activeCheckIn.id },
     data: { status, completedAt: context.now },
@@ -251,7 +254,7 @@ async function finalizeCheckInSession(
       locale: user.locale,
       cycleContext: { briefUrl },
     });
-    const { messages: safeBriefMessages } = safetyWrapWithSummary(userId, [briefMessage]);
+    const { messages: safeBriefMessages } = await safety([briefMessage], traceId, activeCheckIn.id);
     await saveOutboundMessages(
       prisma,
       user.id,
@@ -337,6 +340,22 @@ function safetyWrapWithSummary(
   return { messages: wrapped, summary: summarizeSafety(results) };
 }
 
+function createSafetyWrapper(
+  context: EngineContext,
+  userId: string,
+  cycleId?: string,
+  disease?: string,
+  dbUserId?: string
+) {
+  return async (messages: OutboundMessage[], traceId?: string, checkInId?: string) => {
+    const wrapped = safetyWrapWithSummary(userId, messages, disease);
+    if (dbUserId) {
+      await saveSafetyCheckEvent(context.prisma, dbUserId, wrapped.summary, messages, traceId, cycleId, checkInId);
+    }
+    return wrapped;
+  };
+}
+
 export async function handleInbound(
   context: EngineContext,
   message: InboundMessage
@@ -400,6 +419,14 @@ async function processInboundInternal(
     );
   }
 
+  const safety = createSafetyWrapper(
+    context,
+    userId,
+    cycle?.id,
+    cycle?.disease ?? "asthma",
+    user?.id
+  );
+
   // Resolve check-in context before perception so L1 can use session awareness.
   let activeCheckIn = user && cycle
     ? await prisma.checkIn.findFirst({
@@ -434,7 +461,7 @@ async function processInboundInternal(
         content: { type: "text" as const, text: "Welcome to CareMemory. Send START ASTHMA to begin." },
       },
     ];
-    const { messages, summary } = safetyWrapWithSummary(userId, outbound);
+    const { messages, summary } = await safety(outbound);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -504,7 +531,7 @@ async function processInboundInternal(
         ],
         context.now
       );
-      const { messages, summary } = safetyWrapWithSummary(userId, [
+      const { messages, summary } = await safety([
         {
           userId,
           conversationContext: { requiresSession: true, priority: "normal" },
@@ -532,7 +559,7 @@ async function processInboundInternal(
           },
         },
       ];
-      const { messages, summary } = safetyWrapWithSummary(userId, outbound);
+      const { messages, summary } = await safety(outbound);
       return {
         messages,
         trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -549,7 +576,7 @@ async function processInboundInternal(
         },
       },
     ];
-    const { messages, summary } = safetyWrapWithSummary(userId, outbound);
+    const { messages, summary } = await safety(outbound);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -559,7 +586,7 @@ async function processInboundInternal(
   // Handle account-level system commands
   if (perception.intent.primary === "delete_data") {
     await deleteUserData(prisma, user.id);
-    const { messages, summary } = safetyWrapWithSummary(userId, [
+    const { messages, summary } = await safety([
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -596,7 +623,7 @@ async function processInboundInternal(
         },
       ];
     }
-    const { messages, summary } = safetyWrapWithSummary(userId, outbound);
+    const { messages, summary } = await safety(outbound);
     return {
       messages,
       trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
@@ -606,7 +633,7 @@ async function processInboundInternal(
   if (perception.intent.primary === "help") {
     const { pendingQuestion: pendingHelp } = activeCheckIn ? await getTurnState(prisma, activeCheckIn.id) : { pendingQuestion: null };
     if (!pendingHelp) {
-      const { messages, summary } = safetyWrapWithSummary(userId, [
+      const { messages, summary } = await safety([
         {
           userId,
           conversationContext: { requiresSession: true, priority: "normal" },
@@ -630,7 +657,7 @@ async function processInboundInternal(
       where: { id: cycle.id },
       data: { status: "CANCELLED", endedAt: context.now },
     });
-    const { messages, summary } = safetyWrapWithSummary(userId, [
+    const { messages, summary } = await safety([
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -661,7 +688,7 @@ async function processInboundInternal(
         nextCheckinAt: scheduleNextCheckInOffset(userId, context.now),
       },
     });
-    const { messages, summary } = safetyWrapWithSummary(userId, [
+    const { messages, summary } = await safety([
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -689,7 +716,7 @@ async function processInboundInternal(
         data: { consentGiven: true, consentAt: context.now, consentVersion: "v1" },
       });
       const { messages } = askNext(userId, { ...user, consentGiven: true });
-      const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
+      const { messages: safeMessages, summary } = await safety(messages);
       await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
       if (perception.extractedObservations.length > 0) {
         await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
@@ -706,7 +733,7 @@ async function processInboundInternal(
     if (perception.intent.primary === "initiate") {
       if (getPendingOnboardingField(user)) {
         const { messages } = askNext(userId, user);
-        const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
+        const { messages: safeMessages, summary } = await safety(messages);
         await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
         if (perception.extractedObservations.length > 0) {
           await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
@@ -722,7 +749,7 @@ async function processInboundInternal(
     const pending = getPendingOnboardingField(user);
     if (pending) {
       const { messages } = await handleOnboardingInput(prisma, user, cycle, perception.rawText, context.now);
-      const { messages: safeMessages, summary } = safetyWrapWithSummary(userId, messages);
+      const { messages: safeMessages, summary } = await safety(messages);
       await saveOutboundMessages(prisma, user.id, safeMessages, cycle.id, new Date(), inboundEventId, perception.traceId, undefined);
       if (perception.extractedObservations.length > 0) {
         await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
@@ -737,7 +764,7 @@ async function processInboundInternal(
     if (perception.extractedObservations.length > 0) {
       await saveObservations(prisma, user.id, cycle.id, inboundEventId, perception.extractedObservations);
     }
-    const { messages, summary } = safetyWrapWithSummary(userId, [
+    const { messages, summary } = await safety([
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -755,7 +782,7 @@ async function processInboundInternal(
 
   // L6 fast-path safety
   if (perception.safetyFlags.some((f) => f.riskLevel === "high")) {
-    const { messages, summary } = safetyWrapWithSummary(userId, [
+    const { messages, summary } = await safety([
       {
         userId,
         conversationContext: { requiresSession: true, priority: "urgent" },
@@ -812,7 +839,7 @@ async function processInboundInternal(
     cycle.status === "ACTIVE" &&
     !["initiate", "consent", "skip", "confirm", "stop", "delete_data", "export_data", "help", "question"].includes(perception.intent.primary)
   ) {
-    const { messages, summary } = safetyWrapWithSummary(userId, [
+    const { messages, summary } = await safety([
       {
         userId,
         conversationContext: { requiresSession: true, priority: "normal" },
@@ -954,7 +981,7 @@ async function processInboundInternal(
         });
 
         const sameAsBeforeMessage = await buildSameAsBeforeMessage(userId, pending, renderOptions);
-        const { messages: safeSameAsBeforeMessages } = safetyWrapWithSummary(userId, [sameAsBeforeMessage]);
+        const { messages: safeSameAsBeforeMessages } = await safety([sameAsBeforeMessage]);
         await saveOutboundMessages(
           prisma,
           user.id,
@@ -1028,7 +1055,7 @@ async function processInboundInternal(
           // conversation moving when the user simply missed the message.
           if (looksLikeRepeatRequest(perception.rawText)) {
             const repeatMessage = await buildRepeatMessage(userId, pending, renderOptions);
-            const { messages, summary } = safetyWrapWithSummary(userId, [repeatMessage]);
+            const { messages, summary } = await safety([repeatMessage]);
             await saveOutboundMessages(
               prisma,
               user.id,
@@ -1095,7 +1122,7 @@ async function processInboundInternal(
                   text: "No problem — I'll move on to the next question. You can always come back to this later.",
                 },
               };
-              const { messages, summary } = safetyWrapWithSummary(userId, [moveOnMessage]);
+              const { messages, summary } = await safety([moveOnMessage]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               preOutboundMessages = messages;
               // Fall through to L4 Planner to ask the next question.
@@ -1129,7 +1156,7 @@ async function processInboundInternal(
                 },
               });
 
-              const { messages, summary } = safetyWrapWithSummary(userId, [clarification]);
+              const { messages, summary } = await safety([clarification]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               return {
                 messages,
@@ -1179,7 +1206,7 @@ async function processInboundInternal(
                   traceId: perception.traceId,
                 },
               });
-              const { messages, summary } = safetyWrapWithSummary(userId, [probe]);
+              const { messages, summary } = await safety([probe]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               return {
                 messages,
@@ -1225,7 +1252,7 @@ async function processInboundInternal(
                 goBack.previousQuestion,
                 renderOptions
               );
-              const { messages, summary } = safetyWrapWithSummary(userId, [previousQuestionMessage]);
+              const { messages, summary } = await safety([previousQuestionMessage]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
 
               await prisma.event.create({
@@ -1316,7 +1343,7 @@ async function processInboundInternal(
                   },
                 });
 
-                const { messages, summary } = safetyWrapWithSummary(userId, [followUp]);
+                const { messages, summary } = await safety([followUp]);
                 await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
                 return {
                   messages,
@@ -1376,7 +1403,7 @@ async function processInboundInternal(
 
             if (!acceptedByLlm) {
               const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
-              const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+              const { messages, summary } = await safety([reprompt]);
               await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
               await recordReprompt(
                 prisma,
@@ -1434,7 +1461,7 @@ async function processInboundInternal(
           };
           const nextRepromptCount = repromptCount + 1;
           const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
-          const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+          const { messages, summary } = await safety([reprompt]);
           await saveOutboundMessages(
             prisma,
             user.id,
@@ -1634,7 +1661,7 @@ async function processInboundInternal(
     });
   }
 
-  const { messages, summary } = safetyWrapWithSummary(userId, [outbound]);
+  const { messages, summary } = await safety([outbound]);
   await saveOutboundMessages(
     prisma,
     user.id,
@@ -1703,6 +1730,8 @@ export async function handleCheckInTrigger(
     await saveLlmCallEvent(prisma, cycle.userId, cycle.id, model, input, output, tokenUsage);
     await incrementLlmQuota(context.quotaStore, cycle.userId, context.now);
   };
+
+  const safety = createSafetyWrapper(context, cycle.user.phoneNumber, cycle.id, cycle.disease ?? "asthma", cycle.userId);
 
   const allowLlm = await hasLlmQuota(context.quotaStore, cycle.userId, context.now);
 
@@ -1863,7 +1892,7 @@ export async function handleCheckInTrigger(
       },
     };
   }
-  const { messages, summary } = safetyWrapWithSummary(cycle.user.phoneNumber, [outbound]);
+  const { messages, summary } = await safety([outbound], undefined, checkIn.id);
   await saveOutboundMessages(
     prisma,
     cycle.userId,

@@ -2,7 +2,7 @@ import type { PrismaClient, ObservationCategory, EventType } from "@carememory/d
 import { Prisma } from "@carememory/db";
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import crypto from "node:crypto";
-import type { Observation, PerceptionResult, PlannerOutput } from "./types.js";
+import type { Observation, PerceptionResult, PlannerOutput, SafetyResult } from "./types.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
 
 function makeOutboundIdempotencyKey(message: OutboundMessage, now: Date, salt: string): string {
@@ -328,4 +328,34 @@ export async function getRecentObservations(
     confidence: row.confidence,
     extractedBy: row.extractedBy as "rule" | "llm",
   }));
+}
+
+
+export async function saveSafetyCheckEvent(
+  prisma: PrismaClient,
+  userId: string,
+  summary: SafetyResult,
+  checkedMessages: OutboundMessage[],
+  traceId?: string,
+  cycleId?: string,
+  checkInId?: string
+): Promise<void> {
+  if (!userId) return;
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "safety_check" as EventType,
+      payload: {
+        approved: summary.approved,
+        riskLevel: summary.riskLevel,
+        blockReason: summary.blockReason,
+        requiredAddendums: summary.requiredAddendums,
+        checkedMessageCount: checkedMessages.length,
+        checkedTexts: checkedMessages.map((m) => m.content.text),
+      } as unknown as Prisma.InputJsonValue,
+      traceId,
+    },
+  });
 }

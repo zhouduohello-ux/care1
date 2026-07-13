@@ -1,7 +1,8 @@
 import { describe, it, expect, vi } from "vitest";
-import { saveOutboundMessages } from "./memory.js";
+import { saveOutboundMessages, saveSafetyCheckEvent } from "./memory.js";
 import type { OutboundMessage } from "@carememory/im-core";
 import type { PrismaClient } from "@carememory/db";
+import type { SafetyResult } from "./types.js";
 
 function makeMessage(text: string): OutboundMessage {
   return {
@@ -56,5 +57,41 @@ describe("saveOutboundMessages", () => {
 
     expect(keys).toEqual(["existing-key-123"]);
     expect(prisma.created[0].idempotencyKey).toBe("existing-key-123");
+  });
+});
+
+
+describe("saveSafetyCheckEvent", () => {
+  it("persists a safety_check event with summary and checked message texts", async () => {
+    const prisma = makePrismaStub();
+    const summary: SafetyResult = {
+      approved: true,
+      riskLevel: "low",
+      requiredAddendums: ["This is based on patient-reported information only and is not medical advice."],
+    };
+    const messages = [makeMessage("How often did you use your inhaler?")];
+
+    await saveSafetyCheckEvent(prisma, "user_1", summary, messages, "trace-123", "cycle_1", "checkin_1");
+
+    expect(prisma.event.create).toHaveBeenCalledTimes(1);
+    const data = prisma.created[0];
+    expect(data.type).toBe("safety_check");
+    expect(data.userId).toBe("user_1");
+    expect(data.cycleId).toBe("cycle_1");
+    expect(data.checkInId).toBe("checkin_1");
+    expect(data.traceId).toBe("trace-123");
+    expect((data.payload as Record<string, unknown>).approved).toBe(true);
+    expect((data.payload as Record<string, unknown>).riskLevel).toBe("low");
+    expect((data.payload as Record<string, unknown>).checkedMessageCount).toBe(1);
+    expect((data.payload as Record<string, unknown>).checkedTexts).toEqual([messages[0].content.text]);
+  });
+
+  it("skips persistence when dbUserId is missing", async () => {
+    const prisma = makePrismaStub();
+    const summary: SafetyResult = { approved: true, riskLevel: "none", requiredAddendums: [] };
+
+    await saveSafetyCheckEvent(prisma, "", summary, [makeMessage("Hello")]);
+
+    expect(prisma.event.create).not.toHaveBeenCalled();
   });
 });
