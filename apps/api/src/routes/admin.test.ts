@@ -52,6 +52,16 @@ function makePrismaStub() {
     event: {
       count: vi.fn(async (args?: { where?: Record<string, unknown> }) => {
         if (args?.where?.type === "llm_call") return 7;
+        if (args?.where?.type === "safety_check") {
+          const payload = args.where.payload as { path?: string[]; equals?: unknown } | undefined;
+          if (payload?.path?.[0] === "approved" && payload.equals === false) {
+            return 3;
+          }
+          if (payload?.path?.[0] === "riskLevel" && payload.equals === "high") {
+            return 2;
+          }
+          return 12;
+        }
         if (args?.where?.type === "turn_reprompt") {
           const payload = args.where.payload as { path?: string[]; equals?: string } | undefined;
           if (payload?.path?.[0] === "action") {
@@ -169,6 +179,12 @@ describe("admin routes", () => {
     expect(body.llmTokens).toMatchObject({ prompt: 300, completion: 150, total: 450 });
     expect(body.experimentAssignments).toHaveProperty("checkin_frequency");
     expect(body.experimentAssignments).toHaveProperty("conversation_style");
+    expect(body.safety).toMatchObject({
+      safetyChecksTotal: 12,
+      safetyBlocksTotal: 3,
+      safetyBlocks24h: 3,
+      safetyHighRisk24h: 2,
+    });
     expect(body.turnManager).toMatchObject({
       pendingQuestions: 3,
       reprompts24h: 5,
