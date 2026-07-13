@@ -44,6 +44,7 @@ import {
   loadDeferredQuestionsFromPreviousCheckIn,
   levenshteinDistance,
 } from "./turn-manager.js";
+import { normalizeAnswerText } from "./dialogue-locales/index.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
   return {
@@ -289,6 +290,40 @@ describe("levenshteinDistance", () => {
   it("handles empty strings", () => {
     expect(levenshteinDistance("", "abc")).toBe(3);
     expect(levenshteinDistance("abc", "")).toBe(3);
+  it("matches single_choice synonym after normalization of contractions", () => {
+    const pending = { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0", "reliever_1", "reliever_2", "reliever_3_plus"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "I didn't use it" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("synonym");
+  });
+
+  it("matches multi_select after normalization of punctuation and whitespace", () => {
+    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "  Pollen,  DUST!!  " }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("exact_option");
+  });
+});
+
+describe("normalizeAnswerText", () => {
+  it("trims, lowercases, and collapses whitespace", () => {
+    expect(normalizeAnswerText("  Hello   World  ")).toBe("hello world");
+  });
+
+  it("expands common contractions", () => {
+    expect(normalizeAnswerText("I don't know")).toBe("i do not know");
+    expect(normalizeAnswerText("I didn't use it")).toBe("i did not use it");
+    expect(normalizeAnswerText("can't remember")).toBe("cannot remember");
+    expect(normalizeAnswerText("I'm not sure")).toBe("i am not sure");
+  });
+
+  it("strips surrounding punctuation", () => {
+    expect(normalizeAnswerText("'none!'")).toBe("none");
+    expect(normalizeAnswerText("...mild...")).toBe("mild");
+  });
+
+  it("preserves internal apostrophes in contractions", () => {
+    expect(normalizeAnswerText("it's mild")).toBe("it is mild");
   });
 });
 

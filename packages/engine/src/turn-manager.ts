@@ -2,7 +2,7 @@ import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { Prisma, type PrismaClient, type ObservationCategory } from "@carememory/db";
 import type { Observation, PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
-import { matchOptionSynonym, matchScaleWord, getLocale, type DialogueLocale } from "./dialogue-locales/index.js";
+import { matchOptionSynonym, matchScaleWord, getLocale, normalizeAnswerText, type DialogueLocale } from "./dialogue-locales/index.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
 import type { LlmAuditCallback } from "./perception.js";
 
@@ -300,7 +300,7 @@ export function evaluateAnswerToPendingQuestion(
     }
   }
 
-  const text = (message.content.text ?? "").trim().toLowerCase();
+  const text = normalizeAnswerText(message.content.text ?? "");
 
   if (pending.expectedResponseType === "scale") {
     if (/^[1-5]$/.test(text)) {
@@ -739,7 +739,8 @@ export function extractMultiSelectAnswers(
   localeCode?: string
 ): ExtractedAnswers {
   const locale = localeCode ? getLocale(localeCode) : undefined;
-  const lowerText = text.toLowerCase();
+  const normalizedText = normalizeAnswerText(text);
+  const lowerText = normalizedText.toLowerCase();
 
   // Try whole-phrase synonym matches first (e.g. "chest tightness" before splitting).
   const matchedSet = new Set<string>();
@@ -752,7 +753,7 @@ export function extractMultiSelectAnswers(
   }
 
   // Tokenize for per-token matching.
-  const tokens = text
+  const tokens = normalizedText
     .split(/,|\band\b|\bor\b|\s+/i)
     .map((t) => t.trim())
     .filter(Boolean);
