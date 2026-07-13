@@ -1,7 +1,7 @@
 # CareMemory — AI 编码代理须知
 
 > 本文件面向为本项目编写代码的 AI 代理。只保留与开发、运行、维护相关的信息。项目主要文档与注释使用中文，本文件亦使用中文撰写；代码、命令、文件路径、技术术语保持原样。
-> 最后更新：2026-07-11（重新验证项目结构，确认迁移数量与实际文件一致）。
+> 最后更新：2026-07-13（同步 L6 安全配置与 `CheckIn.mediumRiskCount` 字段）。
 
 ---
 
@@ -39,6 +39,7 @@
 | 待明确边界 | `docs/open-boundaries.md` | 对齐审查中发现的未决边界与遗漏核心能力 |
 | 策略研究文档 | `docs/carememorydiaglog.md` | 市场与疾病策略研究（非开发直接输入） |
 | Staging E2E 运行手册 | `docs/staging-e2e-runbook.md` | 在真实 staging（Render）上运行 E2E smoke 的配置与步骤 |
+| L6 安全层规格文档 | `docs/l6-safety-spec.md` | L6 Safety 层目标、实现状态、配置与验收标准 |
 | WhatsApp 模板文案与提交说明 | `docs/whatsapp-templates.md` | MVP 期间需提交 Meta 审核的 WhatsApp 模板文案、变量与合规要点 |
 | DDL 参考 | `docs/ddl.md` | 数据库 DDL 参考 |
 
@@ -95,7 +96,7 @@ CareMemory/
 
 - 已初始化 pnpm workspaces monorepo 与根目录配置；
 - 已选定技术栈：Node.js 22 LTS + TypeScript 5.7 + Fastify 5 + PostgreSQL 16 + Prisma 6 + Redis 7 + BullMQ 5 + Next.js 15 + Playwright 1.61；
-- 已创建 `packages/db` 与 Prisma schema（七次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`、`20260630150000_add_platform_message_id_unique`、`20260711090253_init`、`20260711130841_add_checkin_nudge_sent_at`、`20260711134420_add_nudge_sent_event_type`），本地基础设施（`infra/docker-compose.yml`）就绪；
+- 已创建 `packages/db` 与 Prisma schema（十一次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`、`20260630150000_add_platform_message_id_unique`、`20260711090253_init`、`20260711130841_add_checkin_nudge_sent_at`、`20260711134420_add_nudge_sent_event_type`、`20260712082041_add_question_history`、`20260712100007_init`、`20260712133705_add_deferred_questions`、`20260713072336_add_medium_risk_count`），本地基础设施（`infra/docker-compose.yml`）就绪；
 - 已实现 `apps/api`（Fastify 后端 + 引擎骨架 + 本地测试工具 + Brief API + GDPR 导出/删除 + admin/metrics），可本地跑通 onboarding → check-in → Disease Card → Brief / PDF 的最小闭环；
 - 已实现 `apps/web`（Next.js Disease Card / Brief / Records / Privacy Policy 页面，含 PDF 下载按钮），已配置 vitest + @testing-library/react + jsdom，并对 `BriefActions`、`DiseaseCardModule` 组件编写了单元测试；
 - 已实现 `packages/im-core`、`packages/im-whatsapp`、`packages/engine`、`packages/disease-card`、`packages/brief-templates`；
@@ -117,7 +118,7 @@ CareMemory/
 - 已实现 A/B 测试框架：基于 userId hash 的稳定分桶，已用于 check-in 频率（48h/72h）与对话风格（v1/v2），通过 `EXPERIMENT_*` 环境变量控制；
 - 已实现崩溃恢复与幂等性：入站消息按 `platformMessageId` 去重，出站消息带 `idempotencyKey` 避免重复发送；
 - 已统一出站消息幂等性：engine 在 `saveOutboundMessages` 中生成 `idempotencyKey` 并写入 `outbound_message` 事件（状态 `pending`），dispatch 层读取已有事件并更新为 `sent`/`failed`；
-- 已实现 4 周周期延续：`PLAN_4_WEEK` cycle 在 28 天结束时提示 CONTINUE，用户回复后创建下一个周期；
+- 已实现 L6 Safety 层：RAG 安全规则校验、出站消息风险动作框架、非文本内容检查、admin 安全指标、LLM 语义安全分类器（含结果缓存与中风险计数器）、按疾病规则验证、被拦截消息 webhook 告警，以及 LLM vs rule-only 的 A/B 实验；
 - 已补充端到端回归 scenario runner（`tests/scenarios/run-scenario.ts`），内置六个 scenario，支持 `message` / `planner` / `safety` / `observation` / `diseaseCard` / `brief` / `pdf` 断言；
 - 已补充 Render 部署蓝图：`infra/render.yaml` 定义 API / Web / PostgreSQL / Redis 服务，GitHub Actions `deploy.yml` 可选触发 Render deploy hook；
 - 已接入可观测性：API 使用 `@sentry/node`（^10.58.0）捕获异常，Next.js Web 使用 `@sentry/nextjs`；API 结构化 JSON 日志通过 Fastify/pino 输出，支持 `LOG_LEVEL` 与敏感字段脱敏；
@@ -207,7 +208,7 @@ CareMemory/
   - 核心模型：User、Cycle、CheckIn、Event、Observation、NarrativeSummary、DiseaseCard、Brief；
   - Event 表同时承担审计日志角色（含 LLM 调用记录的 model/input/output/token usage 字段）；
   - 枚举：CycleType（TRIAL_7_DAY / PLAN_4_WEEK）、CycleStatus（ONBOARDING / ACTIVE / COMPLETED / CANCELLED）、CheckInStatus（SCHEDULED / SENT / COMPLETED / MISSED / EXCEPTION）、EventType（inbound_message / outbound_message / observation_extracted / state_updated / llm_call / safety_check / checkin_scheduled / checkin_sent / checkin_completed / turn_reprompt / nudge_sent / user_action）、ObservationCategory（symptom / medication / trigger / function / adverse_event / subjective / question / system_intent / profile）、NarrativeScope（session / cycle / longitudinal）；
-  - `CheckIn` 额外字段：`repromptCount`、`pendingQuestion`、`nudgeSentAt`、`reminderSentAt`、`inExceptionMode`、`exceptionQuestionsAsked`，用于 Turn Manager、异常模式与提醒状态；
+  - `CheckIn` 额外字段：`repromptCount`、`pendingQuestion`、`nudgeSentAt`、`reminderSentAt`、`inExceptionMode`、`exceptionQuestionsAsked`、`mediumRiskCount`，用于 Turn Manager、异常模式、提醒状态与 L6 中风险计数；
   - 已有三次迁移：`20260615142445_init`、`20260615180000_p1_p2_fields`、`20260629134520_add_password_hash`；
   - Prisma client 输出目录为 `packages/db/generated/client/`（已加入 `.gitignore`）；
 - `packages/engine`：六层引擎核心（对外导出 types + perceive / plan / safetyCheck / renderMessage + LLM/quota/experiments/memory 工具）；
@@ -392,3 +393,17 @@ pending question 的 gentle nudge、静默超时、重提示上限与 LLM fallba
 | `LLM_ANSWER_RELEVANCE_THRESHOLD` | `0.7` | Turn Manager LLM fallback 接受自然语言回复的最低置信度（0–1） |
 
 这些变量在 `apps/api/src/services/scheduler.ts` 与 `packages/engine/src/turn-manager.ts` 中读取，均带非法值回退。
+
+### 7.7 L6 安全配置
+
+L6 Safety 层的 LLM 分类器、缓存、告警与 A/B 实验可通过以下环境变量调整：
+
+| 环境变量 | 默认值 | 说明 |
+|---|---|---|
+| `EXPERIMENT_SAFETY_CLASSIFIER_ENABLED` | `true` | 是否启用 safety classifier 的 LLM vs rule-only A/B 实验 |
+| `EXPERIMENT_SAFETY_CLASSIFIER_SPLIT` | `50,50` | LLM 桶与 rule-only 桶的流量分配（逗号分隔） |
+| `SAFETY_LLM_CACHE_TTL_MS` | `300000`（5 分钟） | LLM safety classifier 结果缓存 TTL；`0` 表示不缓存 |
+| `SAFETY_LLM_CACHE_MAX_ENTRIES` | `1000` | 缓存最大条目数，超过时按 LRU 淘汰 |
+| `SAFETY_ALERT_WEBHOOK_URL` | 未配置 | 被拦截的高风险消息告警 Webhook URL；未配置时不发送 |
+
+这些变量在 `packages/engine/src/experiments.ts`、`packages/engine/src/safety-llm.ts` 与 `packages/engine/src/safety-alert.ts` 中读取，均带非法值回退。
