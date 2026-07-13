@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { PrismaClient } from "@carememory/db";
 import type { Job } from "bullmq";
 import type { Redis } from "ioredis";
-import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs, getPendingTimeoutMs } from "./scheduler.js";
+import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs, getPendingTimeoutMs, getScanLookbackMs, getSchedulerIntervalMs } from "./scheduler.js";
 
 vi.mock("@carememory/engine", () => ({
   handleCheckInTrigger: vi.fn(async () => []),
@@ -154,7 +154,7 @@ describe("scheduler", () => {
   });
 
   describe("createProcessor", () => {
-    it("processes scan-checkins by querying due cycles", async () => {
+    it("processes scan-checkins by querying due cycles within the lookback window", async () => {
       const prisma = makePrismaStub();
       prisma._cycles.push({ id: "cycle_1", user: { phoneNumber: "447123456789" }, nextCheckinAt: new Date("2026-06-15T09:00:00.000Z") });
       const clock = makeClock(new Date("2026-06-15T10:00:00.000Z"));
@@ -164,13 +164,19 @@ describe("scheduler", () => {
 
       expect(prisma.cycle.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { status: "ACTIVE", nextCheckinAt: { lte: clock.now() } },
+          where: {
+            status: "ACTIVE",
+            nextCheckinAt: {
+              lte: clock.now(),
+              gte: expect.any(Date),
+            },
+          },
           include: { user: true },
         })
       );
     });
 
-    it("processes scan-reminders by querying pending check-ins older than 24h", async () => {
+    it("processes scan-reminders by querying pending check-ins older than 24h within the lookback window", async () => {
       const prisma = makePrismaStub();
       prisma._checkIns.push({
         id: "ci_1",
@@ -188,7 +194,7 @@ describe("scheduler", () => {
         expect.objectContaining({
           where: {
             status: "SENT",
-            sentAt: { lte: new Date(clock.now().getTime() - 24 * 60 * 60 * 1000) },
+            sentAt: { lte: new Date(clock.now().getTime() - 24 * 60 * 60 * 1000), gte: expect.any(Date) },
             reminderSentAt: null,
           },
           include: { cycle: { include: { user: true } } },
@@ -215,7 +221,7 @@ describe("scheduler", () => {
         expect.objectContaining({
           where: {
             status: "SENT",
-            sentAt: { lte: new Date(clock.now().getTime() - 24 * 60 * 60 * 1000) },
+            sentAt: { lte: new Date(clock.now().getTime() - 24 * 60 * 60 * 1000), gte: expect.any(Date) },
             pendingQuestion: { not: expect.anything() },
           },
           include: { cycle: { include: { user: true } } },
@@ -252,7 +258,7 @@ describe("scheduler", () => {
         expect.objectContaining({
           where: {
             status: "SENT",
-            sentAt: { lte: new Date(clock.now().getTime() - 12 * 60 * 60 * 1000) },
+            sentAt: { lte: new Date(clock.now().getTime() - 12 * 60 * 60 * 1000), gte: expect.any(Date) },
             nudgeSentAt: null,
             pendingQuestion: { not: expect.anything() },
           },
@@ -289,29 +295,41 @@ describe("scheduler", () => {
       process.env = { ...originalEnv };
       delete process.env.PENDING_QUESTION_NUDGE_AFTER_MS;
       delete process.env.PENDING_QUESTION_TIMEOUT_MS;
+      delete process.env.SCHEDULER_SCAN_LOOKBACK_MS;
+      delete process.env.SCHEDULER_INTERVAL_MS;
     });
 
     afterEach(() => {
       process.env = originalEnv;
     });
 
-    it("returns default nudge and timeout values", () => {
+    it("returns default nudge, timeout, scan lookback and scheduler interval values", () => {
       expect(getNudgeAfterMs()).toBe(12 * 60 * 60 * 1000);
       expect(getPendingTimeoutMs()).toBe(24 * 60 * 60 * 1000);
+      expect(getScanLookbackMs()).toBe(7 * 24 * 60 * 60 * 1000);
+      expect(getSchedulerIntervalMs()).toBe(60_000);
     });
 
     it("reads custom values from environment variables", () => {
       process.env.PENDING_QUESTION_NUDGE_AFTER_MS = "3600000";
       process.env.PENDING_QUESTION_TIMEOUT_MS = "7200000";
+      process.env.SCHEDULER_SCAN_LOOKBACK_MS = "86400000";
+      process.env.SCHEDULER_INTERVAL_MS = "120000";
       expect(getNudgeAfterMs()).toBe(3600000);
       expect(getPendingTimeoutMs()).toBe(7200000);
+      expect(getScanLookbackMs()).toBe(86400000);
+      expect(getSchedulerIntervalMs()).toBe(120000);
     });
 
     it("falls back to defaults for invalid environment values", () => {
       process.env.PENDING_QUESTION_NUDGE_AFTER_MS = "not-a-number";
       process.env.PENDING_QUESTION_TIMEOUT_MS = "-1";
+      process.env.SCHEDULER_SCAN_LOOKBACK_MS = "0";
+      process.env.SCHEDULER_INTERVAL_MS = "abc";
       expect(getNudgeAfterMs()).toBe(12 * 60 * 60 * 1000);
       expect(getPendingTimeoutMs()).toBe(24 * 60 * 60 * 1000);
+      expect(getScanLookbackMs()).toBe(7 * 24 * 60 * 60 * 1000);
+      expect(getSchedulerIntervalMs()).toBe(60_000);
     });
   });
 });

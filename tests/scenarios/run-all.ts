@@ -62,11 +62,15 @@ async function main() {
   const runner = new ScenarioRunner({ apiBaseUrl, verbose });
   const results: RunResult[] = [];
 
-  for (const scenarioPath of paths) {
+  for (let i = 0; i < paths.length; i++) {
+    const scenarioPath = paths[i];
     const scenario = await loadScenario(scenarioPath);
     const result = await runner.run(scenario);
     results.push(result);
     console.log("");
+    if (i < paths.length - 1) {
+      await runner.sleepBetweenScenarios();
+    }
   }
 
   const passed = results.filter((r) => r.passed);
