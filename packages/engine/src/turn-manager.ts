@@ -1066,3 +1066,146 @@ export async function setPendingQuestion(
     },
   });
 }
+
+export interface TopicShiftResult {
+  /** Whether the user's reply shifts away from the pending question to a different topic. */
+  isShift: boolean;
+  /** The topic the user shifted to, if detectable. */
+  shiftedToTopic?: string;
+  /** Observations extracted for the new topic. */
+  shiftedToObservations?: import("./types.js").Observation[];
+}
+
+const NON_SHIFT_INTENTS = new Set([
+  "question",
+  "help",
+  "stop",
+  "delete_data",
+  "export_data",
+  "continue_cycle",
+  "initiate",
+  "correction",
+]);
+
+/**
+ * Detect whether a reply that did not answer the pending question is actually
+ * a topic shift: the user volunteered information about a different subject
+ * instead of answering the asked question.
+ *
+ * We treat this differently from a confused or off-topic reply because the
+ * user is still trying to update their record; we should accept the new info
+ * and defer the pending question rather than reprompt indefinitely.
+ */
+export function detectTopicShift(
+  _message: InboundMessage,
+  perception: PerceptionResult,
+  pending: PendingQuestion
+): TopicShiftResult {
+  if (NON_SHIFT_INTENTS.has(perception.intent.primary)) {
+    return { isShift: false };
+  }
+
+  const shiftedToObservations = perception.extractedObservations.filter(
+    (o) => o.concept !== pending.topic
+  );
+
+  if (shiftedToObservations.length === 0) {
+    return { isShift: false };
+  }
+
+  return {
+    isShift: true,
+    shiftedToTopic: shiftedToObservations[0].concept,
+    shiftedToObservations,
+  };
+}
+
+export interface DeferredQuestion extends PendingQuestion {
+  /** ISO timestamp when the question was deferred. */
+  deferredAt: string;
+}
+
+/**
+ * Move the current pending question into the check-in's deferred list so it
+ * can be re-raised later, and clear the active pending question.
+ */
+export async function deferPendingQuestion(
+  prisma: PrismaClient,
+  checkInId: string,
+  pending: PendingQuestion
+): Promise<DeferredQuestion[]> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { deferredQuestions: true },
+  });
+  const existing = (current?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+  const deferred: DeferredQuestion = {
+    ...pending,
+    deferredAt: new Date().toISOString(),
+  };
+  const updated = [...existing, deferred];
+
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      deferredQuestions: updated as unknown as Prisma.InputJsonValue,
+      pendingQuestion: Prisma.JsonNull,
+      repromptCount: 0,
+    },
+  });
+
+  return updated;
+}
+
+/**
+ * Re-raise the oldest deferred question as a fresh pending question.
+ *
+ * This is used when the current check-in is about to end but still has
+ * questions the user skipped or shifted away from earlier in the session.
+ */
+export async function popDeferredQuestion(
+  prisma: PrismaClient,
+  checkInId: string
+): Promise<PendingQuestion | undefined> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { deferredQuestions: true },
+  });
+  const deferred = (current?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+  if (deferred.length === 0) return undefined;
+
+  const [next, ...rest] = deferred;
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      deferredQuestions: rest.length > 0 ? (rest as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      pendingQuestion: next as unknown as Prisma.InputJsonValue,
+      repromptCount: 0,
+    },
+  });
+
+  return next;
+}
+
+export async function buildDeferredQuestionMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const deferredOutput: PlannerOutput = {
+    reasoning: "Re-raising a question that was deferred earlier in the session.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: `Before we finish, one more question: ${pending.purpose}`,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, deferredOutput, options);
+}
