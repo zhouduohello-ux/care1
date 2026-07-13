@@ -23,6 +23,8 @@ import {
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
+  looksLikeRepeatRequest,
+  buildRepeatMessage,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
   classifyNonAnswer,
@@ -896,6 +898,42 @@ export async function processInbound(
               firstName: user.nickname ?? undefined,
             },
           };
+
+          // Repeat / rephrase request: re-ask the pending question without
+          // counting it as a failed reprompt or clarification. This keeps the
+          // conversation moving when the user simply missed the message.
+          if (looksLikeRepeatRequest(perception.rawText)) {
+            const repeatMessage = await buildRepeatMessage(userId, pending, renderOptions);
+            const { messages, summary } = safetyWrapWithSummary(userId, [repeatMessage]);
+            await saveOutboundMessages(
+              prisma,
+              user.id,
+              messages,
+              cycle.id,
+              new Date(),
+              inboundEventId,
+              perception.traceId,
+              activeCheckIn.id
+            );
+            await prisma.event.create({
+              data: {
+                userId: user.id,
+                cycleId: cycle.id,
+                checkInId: activeCheckIn.id,
+                type: "turn_reprompt" as const,
+                payload: {
+                  topic: pending.topic,
+                  action: "repeat",
+                } as unknown as Prisma.InputJsonValue,
+                timestamp: context.now,
+                traceId: perception.traceId,
+              },
+            });
+            return {
+              messages,
+              trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+            };
+          }
 
           // Clarification request: explain the question in simpler terms without
           // counting it as a failed reprompt attempt. Track repeated clarifications
