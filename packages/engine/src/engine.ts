@@ -8,6 +8,7 @@ import type { EngineContext, EngineTrace, LlmModelType, PlannerOutput, SafetyRes
 import { perceive } from "./perception.js";
 import { safetyCheck, applySafetyAction, SAFETY_FALLBACK_TEXT, loadSafetyRulesForDisease } from "./safety.js";
 import { llmSafetyCheckAsync } from "./safety-llm.js";
+import { sendSafetyAlert, type SafetyAlertPayload } from "./safety-alert.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
 import { combineAdjacentTextMessages } from "./message-batching.js";
@@ -381,6 +382,25 @@ function createSafetyWrapper(
     if (dbUserId) {
       await saveSafetyCheckEvent(context.prisma, dbUserId, wrapped.summary, messages, traceId, cycleId, checkInId);
     }
+
+    if (!wrapped.summary.approved && wrapped.summary.riskLevel === "high") {
+      const alertPayload: SafetyAlertPayload = {
+        eventType: "safety_alert_blocked",
+        timestamp: context.now.toISOString(),
+        userId,
+        dbUserId,
+        cycleId,
+        checkInId,
+        traceId,
+        riskLevel: wrapped.summary.riskLevel,
+        blockReason: wrapped.summary.blockReason,
+        checkedMessageCount: messages.length,
+        checkedMessageTexts: messages.map((m) => m.content.text),
+        environment: process.env.NODE_ENV,
+      };
+      await sendSafetyAlert(alertPayload);
+    }
+
     return wrapped;
   };
 }
