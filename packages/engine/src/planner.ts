@@ -129,6 +129,7 @@ You must return ONLY valid JSON matching this schema:
 }
 Rules:
 - Choose the next uncovered asthma control topic from: ${availableTopics}.
+- Always pick the FIRST uncovered topic in this exact order: ${availableTopics}.
 - Do not choose topics already covered by observations or deferred to later: ${JSON.stringify([...askedTopics, ...deferredTopics])}.
 - If all topics are covered, budget is exhausted, or turns remaining is 1 or less, use type "end_session".
 - Do not diagnose or give treatment advice.
@@ -155,16 +156,25 @@ Current intent: ${input.conversationContext.currentIntent}`;
 
   const parsed = JSON.parse(content) as PlannerOutput;
 
-  // Validate that the LLM chose a known uncovered topic
+  // Validate that the LLM chose a known uncovered topic, and enforce the
+  // question-bank order so E2E and downstream logic remain deterministic.
   if (parsed.nextAction.type === "ask") {
-    const question = getCheckInQuestion(parsed.nextAction.topic, input.patientContext.medications);
-    if (!question || askedTopics.has(parsed.nextAction.topic) || deferredTopics.has(parsed.nextAction.topic)) {
+    const expectedTopic = questions.find((q) => !askedTopics.has(q.topic) && !deferredTopics.has(q.topic))?.topic;
+    let topic = parsed.nextAction.topic;
+    if (expectedTopic && topic !== expectedTopic) {
+      topic = expectedTopic;
+    }
+    const question = getCheckInQuestion(topic, input.patientContext.medications);
+    if (!question || askedTopics.has(topic) || deferredTopics.has(topic)) {
       throw new Error("LLM chose invalid, already asked, or deferred topic");
     }
     return {
       ...parsed,
+      reasoning: `${parsed.reasoning} (guardrail: enforced question-bank order)`.trim(),
       nextAction: {
         ...parsed.nextAction,
+        topic,
+        purpose: question.purpose,
         expectedResponseType: question.expectedResponseType,
         options: question.options,
         budgetCost: parsed.nextAction.budgetCost ?? question.budgetCost,

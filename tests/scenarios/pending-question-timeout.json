@@ -10,7 +10,7 @@
     { "action": "load_persona", "personaId": "controlled_asthma" },
     { "action": "advance", "to": "next_checkin" },
     { "action": "reply", "buttonId": "night_none" },
-    { "action": "advance", "to": "2026-07-14T10:00:00.000Z" },
+    { "action": "advance", "to": "2026-07-16T10:00:00.000Z" },
     { "action": "trigger_expired_pending" },
     { "action": "advance", "to": "next_checkin" },
     { "action": "reply", "buttonId": "reliever_0" },

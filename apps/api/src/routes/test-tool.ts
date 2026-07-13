@@ -1,7 +1,7 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { createHash } from "crypto";
-import { processInbound, handleCheckInTrigger, type EngineContext, deleteUserData, scheduleNextCheckInOffset } from "@carememory/engine";
+import { processInbound, handleCheckInTrigger, type EngineContext, deleteUserData, scheduleNextCheckInOffset, deferPendingQuestion, shouldDeferOnTimeout } from "@carememory/engine";
 import { processExpiredPendingQuestions, processPendingNudges, getNudgeAfterMs, getPendingTimeoutMs } from "../services/scheduler.js";
 import type { InboundMessage, Platform } from "@carememory/im-core";
 import { createExportTokenFactory } from "../lib/export-token.js";
@@ -154,8 +154,22 @@ export default async function testToolRoutes(fastify: FastifyInstance) {
       });
       for (const cycle of cycles) {
         // For the "force next check-in" dev action, mark any unanswered active check-in as missed
-        // so that handleCheckInTrigger can create a fresh one.
+        // so that handleCheckInTrigger can create a fresh one. Defer any pending question first so
+        // cross-check-in persistence can be exercised in E2E scenarios.
         if (to === "next_checkin") {
+          const staleCheckIns = await fastify.prisma.checkIn.findMany({
+            where: { cycleId: cycle.id, status: { in: ["SENT", "SCHEDULED"] } },
+          });
+          for (const stale of staleCheckIns) {
+            const pending = stale.pendingQuestion as { topic?: string } | null;
+            if (pending?.topic && shouldDeferOnTimeout()) {
+              await deferPendingQuestion(
+                fastify.prisma,
+                stale.id,
+                pending as import("@carememory/engine").PendingQuestion
+              );
+            }
+          }
           await fastify.prisma.checkIn.updateMany({
             where: { cycleId: cycle.id, status: { in: ["SENT", "SCHEDULED"] } },
             data: { status: "MISSED" },

@@ -893,33 +893,10 @@ async function processInboundInternal(
       ? evaluateAnswerToPendingQuestion(message, perception, pending, user.locale)
       : undefined;
 
-    // Topic-shift detection: if the user volunteered info about a different
-    // topic instead of answering the pending question, defer the pending
-    // question and let L4 Planner handle the new observation.
-    if (pending && answerEvaluation && !answerEvaluation.isAnswer) {
-      const topicShift = detectTopicShift(message, perception, pending);
-      if (topicShift.isShift) {
-        await deferPendingQuestion(prisma, activeCheckIn.id, pending);
-        await prisma.event.create({
-          data: {
-            userId: user.id,
-            cycleId: cycle.id,
-            checkInId: activeCheckIn.id,
-            type: "user_action" as const,
-            payload: {
-              action: "topic_shift",
-              fromTopic: pending.topic,
-              toTopic: topicShift.shiftedToTopic,
-              toObservations: topicShift.shiftedToObservations?.map((o) => o.concept),
-            } as unknown as Prisma.InputJsonValue,
-            timestamp: context.now,
-            traceId: perception.traceId,
-          },
-        });
-        topicShiftHandled = true;
-      }
-    }
-
+    // Same-as-before shortcut: let the user reuse their previous answer for
+    // the pending question when their reply is clearly a "no change" marker.
+    // We check this before topic-shift detection so that explicit markers like
+    // "same" are not misclassified as a topic shift by the perception layer.
     let sameAsBeforeAccepted = false;
 
     const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
@@ -936,11 +913,7 @@ async function processInboundInternal(
       },
     };
 
-    // Same-as-before shortcut: let the user reuse their previous answer for
-    // the pending question when their reply is clearly a "no change" marker.
-    // We only do this when the reply is *not* already accepted as an answer by
-    // the standard matcher, to avoid double-saving on open-text questions.
-    if (pending && answerEvaluation && !answerEvaluation.isAnswer && !topicShiftHandled && looksLikeSameAsBeforeRequest(perception.rawText)) {
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer && looksLikeSameAsBeforeRequest(perception.rawText)) {
       const previous = await findPreviousObservationForTopic(prisma, cycle.id, pending.topic);
       const resolved = previous ? resolveSameAsBeforeValue(previous.value, pending, user.locale) : { valid: false as const };
       if (previous && resolved.valid) {
@@ -994,6 +967,33 @@ async function processInboundInternal(
         preOutboundMessages.push(...safeSameAsBeforeMessages);
         sameAsBeforeAccepted = true;
         // Fall through to L4 Planner so it can ask the next question.
+      }
+    }
+
+    // Topic-shift detection: if the user volunteered info about a different
+    // topic instead of answering the pending question, defer the pending
+    // question and let L4 Planner handle the new observation.
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer && !sameAsBeforeAccepted) {
+      const topicShift = detectTopicShift(message, perception, pending);
+      if (topicShift.isShift) {
+        await deferPendingQuestion(prisma, activeCheckIn.id, pending);
+        await prisma.event.create({
+          data: {
+            userId: user.id,
+            cycleId: cycle.id,
+            checkInId: activeCheckIn.id,
+            type: "user_action" as const,
+            payload: {
+              action: "topic_shift",
+              fromTopic: pending.topic,
+              toTopic: topicShift.shiftedToTopic,
+              toObservations: topicShift.shiftedToObservations?.map((o) => o.concept),
+            } as unknown as Prisma.InputJsonValue,
+            timestamp: context.now,
+            traceId: perception.traceId,
+          },
+        });
+        topicShiftHandled = true;
       }
     }
 
