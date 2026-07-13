@@ -32,27 +32,68 @@ function classifyAddendums(addendums: string[]): { emergency?: string; medical?:
   };
 }
 
-function buildRequiredAddendums(text: string, disease?: string): string[] {
+function collectTextsToCheck(message: OutboundMessage): string[] {
+  const texts: string[] = [message.content.text];
+  const { content } = message;
+
+  if (content.buttons) {
+    for (const button of content.buttons) {
+      texts.push(button.title);
+    }
+  }
+
+  if (content.list) {
+    for (const item of content.list) {
+      texts.push(item.title);
+      if (item.description) texts.push(item.description);
+    }
+  }
+
+  if (content.templateVariables) {
+    texts.push(...Object.values(content.templateVariables));
+  }
+
+  return texts.filter((t) => t.trim().length > 0);
+}
+
+function checkTextAgainstPatterns(
+  text: string,
+  patterns: RegExp[]
+): Pick<SafetyResult, "approved" | "riskLevel" | "blockReason"> {
+  for (const pattern of patterns) {
+    if (pattern.test(text)) {
+      return {
+        approved: false,
+        riskLevel: "high",
+        blockReason: `Prohibited diagnostic or treatment language detected: ${pattern.source}`,
+      };
+    }
+  }
+  return { approved: true, riskLevel: "none" };
+}
+
+function buildRequiredAddendums(texts: string[], disease?: string): string[] {
+  const combined = texts.join("\n");
   const rules = disease ? loadSafetyRules(disease) : null;
   const fromRag = rules?.requiredAddendums ?? [];
   const { emergency, medical } = classifyAddendums(fromRag);
 
   const addendums: string[] = [];
 
-  if (emergency && /asthma|wheez|inhaler|breath|reliever|controller/i.test(text)) {
+  if (emergency && /asthma|wheez|inhaler|breath|reliever|controller/i.test(combined)) {
     addendums.push(emergency);
   }
 
-  if (medical && /health|symptom|medication|doctor|clinic|visit/i.test(text)) {
+  if (medical && /health|symptom|medication|doctor|clinic|visit/i.test(combined)) {
     addendums.push(medical);
   }
 
   // Fallback for unknown disease or missing RAG rules.
   if (addendums.length === 0 && fromRag.length === 0) {
-    if (/asthma|wheez|inhaler|breath|reliever|controller/i.test(text)) {
+    if (/asthma|wheez|inhaler|breath|reliever|controller/i.test(combined)) {
       addendums.push(FALLBACK_EMERGENCY_ADDENDUM);
     }
-    if (/health|symptom|medication|doctor|clinic|visit/i.test(text)) {
+    if (/health|symptom|medication|doctor|clinic|visit/i.test(combined)) {
       addendums.push(FALLBACK_MEDICAL_DISCLAIMER);
     }
   }
@@ -71,7 +112,7 @@ function buildProhibitedPatterns(disease?: string): RegExp[] {
 }
 
 export function safetyCheck(message: OutboundMessage, disease = "asthma"): SafetyResult {
-  const text = message.content.text;
+  const texts = collectTextsToCheck(message);
   const result: SafetyResult = {
     approved: true,
     requiredAddendums: [],
@@ -79,16 +120,17 @@ export function safetyCheck(message: OutboundMessage, disease = "asthma"): Safet
   };
 
   const prohibitedPatterns = buildProhibitedPatterns(disease);
-  for (const pattern of prohibitedPatterns) {
-    if (pattern.test(text)) {
+  for (const text of texts) {
+    const check = checkTextAgainstPatterns(text, prohibitedPatterns);
+    if (!check.approved) {
       result.approved = false;
-      result.riskLevel = "high";
-      result.blockReason = `Prohibited diagnostic or treatment language detected: ${pattern.source}`;
+      result.riskLevel = check.riskLevel;
+      result.blockReason = check.blockReason;
       return result;
     }
   }
 
-  result.requiredAddendums = buildRequiredAddendums(text, disease);
+  result.requiredAddendums = buildRequiredAddendums(texts, disease);
 
   return result;
 }

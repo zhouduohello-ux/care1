@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import { safetyCheck } from "./safety.js";
 import type { OutboundMessage } from "@carememory/im-core";
 
-function makeMessage(text: string): OutboundMessage {
+function makeMessage(text: string, extra?: Partial<OutboundMessage["content"]>): OutboundMessage {
   return {
     userId: "user_1",
     conversationContext: { requiresSession: true, priority: "normal" },
-    content: { type: "text", text },
+    content: { type: "text", text, ...extra },
   };
 }
 
@@ -52,3 +52,43 @@ describe("safetyCheck", () => {
     expect(result.requiredAddendums).toHaveLength(0);
   });
 });
+
+
+  it("blocks prohibited phrases inside button titles", () => {
+    const result = safetyCheck(
+      makeMessage("Select an option:", {
+        buttons: [
+          { id: "safe", title: "I feel fine" },
+          { id: "unsafe", title: "You should increase your inhaler dose." },
+        ],
+      })
+    );
+    expect(result.approved).toBe(false);
+    expect(result.riskLevel).toBe("high");
+  });
+
+  it("blocks prohibited phrases inside list row titles and descriptions", () => {
+    const result = safetyCheck(
+      makeMessage("Choose one:", {
+        list: [
+          { id: "a", title: "Option A", description: "Just a routine check." },
+          { id: "b", title: "Option B", description: "Take 2 puffs of your reliever now." },
+        ],
+      })
+    );
+    expect(result.approved).toBe(false);
+    expect(result.riskLevel).toBe("high");
+  });
+
+  it("requires medical disclaimer when asthma keywords appear only in buttons", () => {
+    const result = safetyCheck(
+      makeMessage("Please choose:", {
+        buttons: [
+          { id: "a", title: "I used my inhaler" },
+          { id: "b", title: "I had wheezing" },
+        ],
+      })
+    );
+    expect(result.approved).toBe(true);
+    expect(result.requiredAddendums.some((a) => a.includes("999"))).toBe(true);
+  });
