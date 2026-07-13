@@ -32,15 +32,23 @@ L6 is the **last gate before a message is dispatched** to the patient. It must:
   - Medical/health keywords → medical disclaimer.
   - Neutral content → no addendums.
 
-### 2.2 Wrapper and risk action: `packages/engine/src/engine.ts`
+### 2.2 Wrapper, risk action, and LLM classifier: `packages/engine/src/engine.ts`
 
 - `safetyWrapWithSummary(userId, messages, disease?)` — pure function; returns wrapped messages + aggregated `SafetyResult`.
-- `applySafetyAction(messages, summary)` — aborts the entire batch and replaces it with a safe fallback when a future classifier returns `approved=true` + `riskLevel=high`.
-- `createSafetyWrapper(context, userId, cycleId?, disease?, dbUserId?)` — async closure that:
-  - Calls `safetyWrapWithSummary`.
+- `applySafetyAction(messages, summary)` — aborts the entire batch and replaces it with a safe fallback when `approved=true` + `riskLevel=high`.
+- `createSafetyWrapper(context, userId, cycleId?, disease?, dbUserId?, allowLlm?)` — async closure that:
+  - Calls `safetyWrapWithSummary` (rule-based).
   - Calls `applySafetyAction`.
+  - If `allowLlm` is true, the rule-based result is `approved`, and a safety-layer LLM client is configured, calls `llmSafetyCheckAsync()` from `safety-llm.ts`.
+  - Falls back to the rule-based result if the LLM classifier errors or returns non-JSON.
   - Persists a `safety_check` Event via `saveSafetyCheckEvent` when `dbUserId` is known.
 - All outbound batches in `processInboundInternal`, `finalizeCheckInSession`, and `handleCheckInTrigger` route through the wrapper.
+
+### 2.5 LLM semantic classifier: `packages/engine/src/safety-llm.ts`
+
+- `llmSafetyCheckAsync(input, llmClient)` — sends the outbound batch plus disease context and RAG safety rules to an LLM.
+- Expects JSON output: `{ approved: boolean, riskLevel: "none" | "low" | "medium" | "high", blockReason?: string }`.
+- Non-JSON or malformed responses are treated as unsafe (approved=false, riskLevel=high) to fail closed.
 
 ### 2.3 RAG rules: `packages/rag/src/safety-rules.ts`
 
@@ -89,23 +97,21 @@ interface SafetyResult {
 | `true` | `none` | Pass through unchanged. |
 | `true` | `low` | Pass through with addendums if applicable. |
 | `true` | `medium` | Pass through with addendums; currently no extra action. |
-| `true` | `high` | **Abort the whole batch** via `applySafetyAction` and return a safe fallback. Reserved for future LLM-based classifiers. |
+| `true` | `high` | **Abort the whole batch** via `applySafetyAction` and return a safe fallback. Triggered by the LLM semantic classifier when it flags paraphrased unsafe advice. |
 
 ## 5. Known gaps and planned work
 
 ### 5.1 Outbound risk action (P1 — safety critical) ✅ Done
 
-`summary.riskLevel` is now consumed by `applySafetyAction()`. If a classifier ever returns `approved=true` + `riskLevel=high`, the batch is aborted and replaced with a safe fallback. `medium` risk still passes through; future work may increment a per-check-in concern counter.
+`summary.riskLevel` is now consumed by `applySafetyAction()`. If the LLM classifier returns `approved=true` + `riskLevel=high`, the batch is aborted and replaced with a safe fallback. `medium` risk still passes through; future work may increment a per-check-in concern counter.
 
-### 5.2 LLM-based semantic safety classifier (P2)
+### 5.2 LLM-based semantic safety classifier (P2) ✅ Done
 
-**Gap**: Current checker is regex + exact-phrase based. It cannot catch paraphrased dangerous advice.
+`safety-llm.ts` provides `llmSafetyCheckAsync()`. It is invoked by `createSafetyWrapper()` when `allowLlm` is true and a safety-layer LLM client is available. The prompt includes disease context and RAG safety rules; output is JSON `{approved, riskLevel, blockReason}`. LLM failures and malformed responses fall back to the rule-based result (fail-open on error, fail-closed on non-JSON).
 
-**Plan**:
-- Add optional LLM classifier behind quota/flag.
-- Input: raw L5 output + RAG safety rules.
-- Output: `approved`, `riskLevel`, `blockReason`.
-- Fall back to rule-based when quota exceeded or LLM unavailable.
+**Future tuning**:
+- A/B test classifier vs. rule-only to measure block rate and false-positive rate.
+- Cache classifier results per message text to reduce LLM cost.
 
 ### 5.3 Non-text content safety (P2) ✅ Done
 
@@ -134,6 +140,7 @@ Future work: webhook/notification hook for blocked messages.
 | Test file | Coverage |
 |-----------|----------|
 | `packages/engine/src/safety.test.ts` | Regex blocks, RAG phrase blocks, addendum classification, neutral content, button/list scanning, `applySafetyAction` batch abort. |
+| `packages/engine/src/safety-llm.test.ts` | LLM approval, LLM blocking, malformed/non-JSON responses. |
 | `packages/engine/src/memory.test.ts` | `saveSafetyCheckEvent` payload and skip-on-missing-user behaviour. |
 | `packages/engine/src/engine.integration.test.ts` | End-to-end flow including safety wrap + audit persistence. |
 | `apps/api/src/routes/admin.test.ts` | Safety metrics in `/admin/metrics`. |
@@ -141,6 +148,7 @@ Future work: webhook/notification hook for blocked messages.
 ## 7. Related files
 
 - `packages/engine/src/safety.ts`
+- `packages/engine/src/safety-llm.ts`
 - `packages/engine/src/engine.ts`
 - `packages/engine/src/memory.ts`
 - `packages/rag/src/safety-rules.ts`
