@@ -1,7 +1,7 @@
 {
   "id": "turn_manager_timeline",
   "name": "Turn manager full timeline - reprompt, nudge, timeout",
-  "description": "Verifies the complete turn management lifecycle: question -> clarification request -> clarification -> 12h gentle nudge -> 24h silent timeout with no_answer observation.",
+  "description": "Verifies the complete turn management lifecycle: question -> clarification request -> clarification -> 12h gentle nudge -> 24h silent timeout that defers the pending question to the next check-in.",
   "user": {
     "phoneNumber": "test_turn_timeline"
   },
@@ -34,6 +34,10 @@
     },
     {
       "action": "trigger_expired_pending"
+    },
+    {
+      "action": "advance",
+      "to": "next_checkin"
     }
   ],
   "expectations": [
@@ -54,14 +58,11 @@
       "description": "12h pending question nudge is sent"
     },
     {
-      "afterStep": 8,
-      "type": "observation",
-      "op": "exists",
-      "filter": {
-        "category": "subjective",
-        "value": "no_answer"
-      },
-      "description": "24h timeout creates a no_answer observation"
+      "afterStep": 9,
+      "type": "message",
+      "op": "contains",
+      "value": "Before we move on:",
+      "description": "24h timeout defers the question; next check-in re-raises it"
     }
   ]
 }

@@ -144,6 +144,8 @@ export interface AnswerConfidenceResult {
     | "none";
   /** Optional explanation for the score. */
   reasoning?: string;
+  /** Resolved answer value, when available (e.g. matched option id, scale score). */
+  value?: unknown;
 }
 
 /**
@@ -278,9 +280,15 @@ export function evaluateAnswerToPendingQuestion(
   if (pending.expectedResponseType === "text") {
     const topicObservation = perception.extractedObservations.find((o) => o.concept === pending.topic);
     if (topicObservation) {
-      return { isAnswer: true, confidence: 0.8, matchMethod: "text_observation", reasoning: "perception extracted observation for pending topic" };
+      return {
+        isAnswer: true,
+        confidence: 0.8,
+        matchMethod: "text_observation",
+        reasoning: "perception extracted observation for pending topic",
+        value: topicObservation.value,
+      };
     }
-    return { isAnswer: true, confidence: 0.6, matchMethod: "text", reasoning: "free-text reply to text question" };
+    return { isAnswer: true, confidence: 0.6, matchMethod: "text", reasoning: "free-text reply to text question", value: message.content.text ?? "" };
   }
 
   const options = pending.options ?? [];
@@ -289,14 +297,14 @@ export function evaluateAnswerToPendingQuestion(
   if (message.content.type === "button_reply" && message.content.buttonId) {
     const id = message.content.buttonId.toLowerCase();
     if (optionSet.has(id)) {
-      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact button option id" };
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact button option id", value: id };
     }
   }
 
   if (message.content.type === "list_reply" && message.content.listId) {
     const id = message.content.listId.toLowerCase();
     if (optionSet.has(id)) {
-      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact list option id" };
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact list option id", value: id };
     }
   }
 
@@ -304,21 +312,31 @@ export function evaluateAnswerToPendingQuestion(
 
   if (pending.expectedResponseType === "scale") {
     if (/^[1-5]$/.test(text)) {
-      return { isAnswer: true, confidence: 1, matchMethod: "scale_number", reasoning: "numeric scale 1-5" };
+      return { isAnswer: true, confidence: 1, matchMethod: "scale_number", reasoning: "numeric scale 1-5", value: Number(text) };
     }
-    if (locale && matchScaleWord(locale, text) !== undefined) {
-      return { isAnswer: true, confidence: 0.9, matchMethod: "scale_word", reasoning: "scale word match" };
+    if (locale) {
+      const scaleWord = matchScaleWord(locale, text);
+      if (scaleWord !== undefined) {
+        return { isAnswer: true, confidence: 0.9, matchMethod: "scale_word", reasoning: "scale word match", value: scaleWord };
+      }
     }
   }
 
   if (pending.expectedResponseType === "single_choice") {
     if (optionSet.has(text)) {
-      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact option id text" };
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "exact option id text", value: text };
     }
     if (locale) {
-      const matched = options.some((optionId) => matchOptionSynonym(locale, optionId, text));
-      if (matched) {
-        return { isAnswer: true, confidence: 0.9, matchMethod: "synonym", reasoning: "option synonym match" };
+      for (const optionId of options) {
+        if (matchOptionSynonym(locale, optionId, text)) {
+          return {
+            isAnswer: true,
+            confidence: 0.9,
+            matchMethod: "synonym",
+            reasoning: "option synonym match",
+            value: optionId,
+          };
+        }
       }
       // Fuzzy / typo-tolerant matching against option IDs, labels, and synonyms.
       const fuzzy = findFuzzyOptionMatch(text, options, locale);
@@ -328,6 +346,7 @@ export function evaluateAnswerToPendingQuestion(
           confidence: fuzzy.confidence,
           matchMethod: "fuzzy_synonym",
           reasoning: `fuzzy match to option ${fuzzy.optionId}`,
+          value: fuzzy.optionId,
         };
       }
     }
@@ -336,18 +355,25 @@ export function evaluateAnswerToPendingQuestion(
   if (pending.expectedResponseType === "multi_select") {
     const { matched, hasMeaningfulUnmatched } = extractMultiSelectAnswers(text, options, localeCode);
     if (matched.length > 0 && !hasMeaningfulUnmatched) {
-      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "all meaningful tokens matched options" };
+      return { isAnswer: true, confidence: 1, matchMethod: "exact_option", reasoning: "all meaningful tokens matched options", value: matched };
     }
     if (matched.length > 0 && hasMeaningfulUnmatched) {
       // Partial answer: the reply is not a full answer, but we understood some of it.
       const confidence = Math.max(0.4, Math.min(0.9, matched.length / (matched.length + 1)));
-      return { isAnswer: false, confidence, matchMethod: "partial", reasoning: `partial match: ${matched.length} option(s) understood` };
+      return { isAnswer: false, confidence, matchMethod: "partial", reasoning: `partial match: ${matched.length} option(s) understood`, value: matched };
     }
   }
 
   // Accept free-text replies when perception extracted an observation for the pending topic.
-  if (perception.extractedObservations.some((o) => o.concept === pending.topic)) {
-    return { isAnswer: true, confidence: 0.8, matchMethod: "text_observation", reasoning: "perception extracted observation for pending topic" };
+  const topicObservation = perception.extractedObservations.find((o) => o.concept === pending.topic);
+  if (topicObservation) {
+    return {
+      isAnswer: true,
+      confidence: 0.8,
+      matchMethod: "text_observation",
+      reasoning: "perception extracted observation for pending topic",
+      value: topicObservation.value,
+    };
   }
 
   return { isAnswer: false, confidence: 0, matchMethod: "none", reasoning: "no rule-based match" };
@@ -1465,12 +1491,21 @@ const NON_SHIFT_INTENTS = new Set([
   "question",
   "help",
   "stop",
+  "skip",
   "delete_data",
   "export_data",
   "continue_cycle",
   "initiate",
   "correction",
 ]);
+
+/**
+ * Concepts that perception may attach to arbitrary free-text replies but that do
+ * not represent a deliberate shift to another clinical topic. Treating them as a
+ * topic shift would cause off-topic replies to skip the pending question instead
+ * of being reprompted.
+ */
+const GENERIC_TOPIC_SHIFT_CONCEPTS = new Set(["free_text_response"]);
 
 /**
  * Detect whether a reply that did not answer the pending question is actually
@@ -1491,7 +1526,7 @@ export function detectTopicShift(
   }
 
   const shiftedToObservations = perception.extractedObservations.filter(
-    (o) => o.concept !== pending.topic
+    (o) => o.concept !== pending.topic && !GENERIC_TOPIC_SHIFT_CONCEPTS.has(o.concept)
   );
 
   if (shiftedToObservations.length === 0) {

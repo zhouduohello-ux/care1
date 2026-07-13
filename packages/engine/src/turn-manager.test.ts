@@ -1424,6 +1424,14 @@ describe("detectTopicShift", () => {
     expect(result.isShift).toBe(false);
   });
 
+  it("returns false when the only extracted observation is a generic catch-all", () => {
+    const perception = makePerception({
+      extractedObservations: [{ category: "subjective", concept: "free_text_response", value: "the weather is nice", confidence: 1, extractedBy: "rule" }],
+    });
+    const result = detectTopicShift(makeInbound({ text: "the weather is nice" }), perception, pending);
+    expect(result.isShift).toBe(false);
+  });
+
   it("returns false when no observations are extracted", () => {
     const perception = makePerception({ rawText: "something random" });
     const result = detectTopicShift(makeInbound({ text: "something random" }), perception, pending);
