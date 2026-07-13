@@ -688,38 +688,38 @@ GET /admin/feedbacks
 
 ### 17.1 Onboarding 验收
 
-- [ ] 用户发送 `START ASTHMA` 后收到欢迎语和隐私链接；
-- [ ] 未同意用户不会收到 check-in；
-- [ ] 同意完成后创建 Cycle 并记录 `consentAt`。
+- [x] 用户发送 `START ASTHMA` 后收到欢迎语和隐私链接；
+- [x] 未同意用户不会收到 check-in；
+- [x] 同意完成后创建 Cycle 并记录 `consentAt`。
 
 ### 17.2 Check-in 验收
 
-- [ ] 7 天内发送 4 次 check-in，间隔约 48 小时；
-- [ ] 每次常规 check-in 最多 3 个问题；
-- [ ] 异常信号触发 budget 覆盖；
-- [ ] 用户回答后正确保存 observation；
-- [ ] 未完成的 check-in 发送一次提醒。
+- [x] 7 天内发送 4 次 check-in，间隔约 48 小时；
+- [x] 每次常规 check-in 最多 3 个问题；
+- [x] 异常信号触发 budget 覆盖；
+- [x] 用户回答后正确保存 observation；
+- [x] 未完成的 check-in 发送一次提醒。
 
 ### 17.3 Disease Card 验收
 
-- [ ] 每次 check-in 后 Disease Card 可更新；
-- [ ] 7 天后展示早期 Disease Card；
-- [ ] 不输出未直接询问的临床量表分数；
-- [ ] 包含安全提示和免责声明。
+- [x] 每次 check-in 后 Disease Card 可更新；
+- [x] 7 天后展示早期 Disease Card；
+- [x] 不输出未直接询问的临床量表分数；
+- [x] 包含安全提示和免责声明。
 
 ### 17.4 Brief 验收
 
-- [ ] Day 7 完成后 2 分钟内生成 Web Brief；
-- [ ] Brief 内容来自 Disease Card；
-- [ ] PDF 下载文件内容与 Web 页面一致；
-- [ ] 过期或错误的 accessToken 无法访问 Brief。
+- [x] Day 7 完成后 2 分钟内生成 Web Brief；
+- [x] Brief 内容来自 Disease Card；
+- [x] PDF 下载文件内容与 Web 页面一致；
+- [x] 过期或错误的 accessToken 无法访问 Brief。
 
 ### 17.5 合规验收
 
-- [ ] 所有 outbound 消息不包含诊断或治疗建议；
-- [ ] 哮喘相关消息包含急救提示；
-- [ ] 用户可删除账户和数据；
-- [ ] 医生端 Brief 包含免责声明。
+- [x] 所有 outbound 消息不包含诊断或治疗建议；
+- [x] 哮喘相关消息包含急救提示；
+- [x] 用户可删除账户和数据；
+- [x] 医生端 Brief 包含免责声明。
 
 ---
 
