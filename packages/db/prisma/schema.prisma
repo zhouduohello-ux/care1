@@ -101,6 +101,7 @@ model CheckIn {
   reminderSentAt        DateTime?
   turnCount             Int         @default(0)
   turnBudget            Int         @default(12)
+  mediumRiskCount       Int         @default(0)
 
   events           Event[]
 

@@ -103,7 +103,9 @@ interface SafetyResult {
 
 ### 5.1 Outbound risk action (P1 — safety critical) ✅ Done
 
-`summary.riskLevel` is now consumed by `applySafetyAction()`. If the LLM classifier returns `approved=true` + `riskLevel=high`, the batch is aborted and replaced with a safe fallback. `medium` risk still passes through; future work may increment a per-check-in concern counter.
+`summary.riskLevel` is now consumed by `applySafetyAction()`. If the LLM classifier returns `approved=true` + `riskLevel=high`, the batch is aborted and replaced with a safe fallback.
+
+`medium` risk no longer passes through silently: `createSafetyWrapper()` increments `CheckIn.mediumRiskCount` and writes the updated count into the `safety_check` audit event. This gives operations a per-check-in concern counter for future escalation rules.
 
 ### 5.2 LLM-based semantic safety classifier (P2) ✅ Done
 

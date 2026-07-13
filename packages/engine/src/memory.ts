@@ -338,7 +338,8 @@ export async function saveSafetyCheckEvent(
   checkedMessages: OutboundMessage[],
   traceId?: string,
   cycleId?: string,
-  checkInId?: string
+  checkInId?: string,
+  mediumRiskCount?: number
 ): Promise<void> {
   if (!userId) return;
   await prisma.event.create({
@@ -354,6 +355,7 @@ export async function saveSafetyCheckEvent(
         requiredAddendums: summary.requiredAddendums,
         checkedMessageCount: checkedMessages.length,
         checkedTexts: checkedMessages.map((m) => m.content.text),
+        mediumRiskCount,
       } as unknown as Prisma.InputJsonValue,
       traceId,
     },

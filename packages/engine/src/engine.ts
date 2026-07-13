@@ -379,8 +379,27 @@ function createSafetyWrapper(
       }
     }
 
+    let mediumRiskCount: number | undefined;
+    if (wrapped.summary.approved && wrapped.summary.riskLevel === "medium" && checkInId) {
+      const updated = await context.prisma.checkIn.update({
+        where: { id: checkInId },
+        data: { mediumRiskCount: { increment: 1 } },
+        select: { mediumRiskCount: true },
+      });
+      mediumRiskCount = updated.mediumRiskCount;
+    }
+
     if (dbUserId) {
-      await saveSafetyCheckEvent(context.prisma, dbUserId, wrapped.summary, messages, traceId, cycleId, checkInId);
+      await saveSafetyCheckEvent(
+        context.prisma,
+        dbUserId,
+        wrapped.summary,
+        messages,
+        traceId,
+        cycleId,
+        checkInId,
+        mediumRiskCount
+      );
     }
 
     if (!wrapped.summary.approved && wrapped.summary.riskLevel === "high") {
