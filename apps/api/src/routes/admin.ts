@@ -35,6 +35,10 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       diseaseCardCount,
       briefCount,
       llmCallCount,
+      safetyChecksTotal,
+      safetyBlocksTotal,
+      safetyBlocks24h,
+      safetyHighRisk24h,
       exceptionToday,
       exceptionWeek,
       pendingQuestions,
@@ -51,6 +55,24 @@ export default async function adminRoutes(fastify: FastifyInstance) {
       fastify.prisma.diseaseCard.count(),
       fastify.prisma.brief.count(),
       fastify.prisma.event.count({ where: { type: "llm_call" } }),
+      fastify.prisma.event.count({ where: { type: "safety_check" } }),
+      fastify.prisma.event.count({
+        where: { type: "safety_check", payload: { path: ["approved"], equals: false } },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "safety_check",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["approved"], equals: false },
+        },
+      }),
+      fastify.prisma.event.count({
+        where: {
+          type: "safety_check",
+          timestamp: { gte: oneDayAgo },
+          payload: { path: ["riskLevel"], equals: "high" },
+        },
+      }),
       fastify.prisma.checkIn.count({
         where: { status: "EXCEPTION", completedAt: { gte: startOfDay } },
       }),
@@ -228,6 +250,12 @@ export default async function adminRoutes(fastify: FastifyInstance) {
         exceptionsToday: exceptionToday,
         exceptionsThisWeek: exceptionWeek,
         failedOutbound24h,
+      },
+      safety: {
+        safetyChecksTotal,
+        safetyBlocksTotal,
+        safetyBlocks24h,
+        safetyHighRisk24h,
       },
       turnManager: {
         pendingQuestions,
