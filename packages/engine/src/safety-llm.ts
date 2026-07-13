@@ -67,12 +67,15 @@ function buildUserPrompt(input: LlmSafetyCheckInput): string {
 }
 
 function parseLlmSafetyResponse(content: string): SafetyResult {
-  const cleaned = content.trim().replace(/^```json\s*|\s*```$/g, "");
+  const jsonText = extractJsonObject(content);
+  if (!jsonText) {
+    return { approved: false, riskLevel: "high", requiredAddendums: [], blockReason: "LLM safety response did not contain a valid JSON object" };
+  }
+
   let parsed: unknown;
   try {
-    parsed = JSON.parse(cleaned);
+    parsed = JSON.parse(jsonText);
   } catch {
-    // Non-JSON response is treated as a fallback refusal to be safe.
     return { approved: false, riskLevel: "high", requiredAddendums: [], blockReason: "LLM safety response was not valid JSON" };
   }
 
@@ -88,6 +91,54 @@ function parseLlmSafetyResponse(content: string): SafetyResult {
   const blockReason = typeof obj.blockReason === "string" ? obj.blockReason : undefined;
 
   return { approved, riskLevel, requiredAddendums: [], blockReason };
+}
+
+/**
+ * Extract the first top-level JSON object from the LLM response.
+ * Handles markdown fences and explanatory text before/after the JSON.
+ * Returns undefined if no well-formed object is found.
+ */
+function extractJsonObject(content: string): string | undefined {
+  const cleaned = content.trim().replace(/^```json\s*|\s*```$/g, "");
+  const firstBrace = cleaned.indexOf("{");
+  if (firstBrace === -1) return undefined;
+
+  let depth = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = firstBrace; i < cleaned.length; i++) {
+    const ch = cleaned[i];
+    if (inString) {
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (ch === "\\") {
+        escape = true;
+        continue;
+      }
+      if (ch === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (ch === '"') {
+      inString = true;
+      continue;
+    }
+    if (ch === "{") {
+      depth++;
+    } else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        return cleaned.slice(firstBrace, i + 1);
+      }
+    }
+  }
+
+  return undefined;
 }
 
 // ── In-memory result cache ─────────────────────────────────────────────

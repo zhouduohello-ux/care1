@@ -59,6 +59,30 @@ describe("llmSafetyCheckAsync", () => {
     expect(result.riskLevel).toBe("high");
   });
 
+  it("extracts JSON object from explanatory text", async () => {
+    const client = createStubClient(
+      'Here is my classification:\n\n{"approved": true, "riskLevel": "low"}\n\nHope this helps.'
+    );
+    const result = await llmSafetyCheckAsync(DEFAULT_INPUT, client);
+    expect(result.approved).toBe(true);
+    expect(result.riskLevel).toBe("low");
+  });
+
+  it("extracts JSON object from markdown code fence", async () => {
+    const client = createStubClient('```json\n{"approved": false, "riskLevel": "high"}\n```');
+    const result = await llmSafetyCheckAsync(DEFAULT_INPUT, client);
+    expect(result.approved).toBe(false);
+    expect(result.riskLevel).toBe("high");
+  });
+
+  it("blocks when no JSON object is present", async () => {
+    const client = createStubClient("I cannot decide because the request is ambiguous.");
+    const result = await llmSafetyCheckAsync(DEFAULT_INPUT, client);
+    expect(result.approved).toBe(false);
+    expect(result.riskLevel).toBe("high");
+    expect(result.blockReason).toMatch(/did not contain a valid JSON object/);
+  });
+
   it("caches the classifier result and skips the LLM on identical input", async () => {
     let callCount = 0;
     const client = {
