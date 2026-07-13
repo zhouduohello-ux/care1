@@ -32,6 +32,10 @@ import {
   getMaxReprompts,
   getLlmAnswerRelevanceThreshold,
   getSessionTurnBudget,
+  looksLikeSameAsBeforeRequest,
+  findPreviousObservationForTopic,
+  resolveSameAsBeforeValue,
+  buildSameAsBeforeMessage,
   MAX_REPROMPTS,
   type PendingQuestion,
   type AnswerConfidenceResult,
@@ -858,7 +862,84 @@ export async function processInbound(
     const answerEvaluation = pending
       ? evaluateAnswerToPendingQuestion(message, perception, pending, user.locale)
       : undefined;
-    if (pending && answerEvaluation && !answerEvaluation.isAnswer) {
+    let sameAsBeforeAccepted = false;
+
+    const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+    const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+    const renderOptions = {
+      style: conversationStyle,
+      locale: user.locale,
+      cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+      outOfSession: !isSessionOpen(user, context.now),
+      templateResolver: context.templateResolver,
+      templateContext: {
+        nickname: user.nickname ?? undefined,
+        firstName: user.nickname ?? undefined,
+      },
+    };
+
+    // Same-as-before shortcut: let the user reuse their previous answer for
+    // the pending question when their reply is clearly a "no change" marker.
+    // We only do this when the reply is *not* already accepted as an answer by
+    // the standard matcher, to avoid double-saving on open-text questions.
+    if (pending && !answerEvaluation?.isAnswer && looksLikeSameAsBeforeRequest(perception.rawText)) {
+      const previous = await findPreviousObservationForTopic(prisma, cycle.id, pending.topic);
+      const resolved = previous ? resolveSameAsBeforeValue(previous.value, pending, user.locale) : { valid: false as const };
+      if (previous && resolved.valid) {
+        await saveObservations(
+          prisma,
+          user.id,
+          cycle.id,
+          inboundEventId,
+          [
+            {
+              category: "subjective" as const,
+              concept: pending.topic,
+              value: resolved.normalizedValue as Prisma.InputJsonValue,
+              confidence: 0.95,
+              extractedBy: "rule" as const,
+              attributes: {
+                matchMethod: "same_as_before",
+                previousObservationId: previous.observationId,
+              },
+            },
+          ],
+          context.now
+        );
+        await clearPendingQuestion(prisma, activeCheckIn.id);
+        await prisma.event.update({
+          where: { id: inboundEventId },
+          data: {
+            payload: {
+              ...perception,
+              turnManager: {
+                pendingTopic: pending.topic,
+                matchConfidence: 0.95,
+                matchMethod: "same_as_before",
+              },
+            } as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        const sameAsBeforeMessage = await buildSameAsBeforeMessage(userId, pending, renderOptions);
+        const { messages: safeSameAsBeforeMessages } = safetyWrapWithSummary(userId, [sameAsBeforeMessage]);
+        await saveOutboundMessages(
+          prisma,
+          user.id,
+          safeSameAsBeforeMessages,
+          cycle.id,
+          new Date(),
+          inboundEventId,
+          perception.traceId,
+          activeCheckIn.id
+        );
+        preOutboundMessages.push(...safeSameAsBeforeMessages);
+        sameAsBeforeAccepted = true;
+        // Fall through to L4 Planner so it can ask the next question.
+      }
+    }
+
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer && !sameAsBeforeAccepted) {
       const nextRepromptCount = repromptCount + 1;
 
       if (nextRepromptCount > getMaxReprompts()) {
@@ -883,20 +964,6 @@ export async function processInbound(
         );
         await clearPendingQuestion(prisma, activeCheckIn.id);
       } else {
-          const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
-          const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-          const renderOptions = {
-            style: conversationStyle,
-            locale: user.locale,
-            cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
-            outOfSession: !isSessionOpen(user, context.now),
-            templateResolver: context.templateResolver,
-            templateContext: {
-              nickname: user.nickname ?? undefined,
-              firstName: user.nickname ?? undefined,
-            },
-          };
-
           // Clarification request: explain the question in simpler terms without
           // counting it as a failed reprompt attempt. Track repeated clarifications
           // so the system can rephrase, offer skip, and eventually move on.
