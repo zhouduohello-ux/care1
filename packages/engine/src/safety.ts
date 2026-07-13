@@ -135,6 +135,36 @@ export function safetyCheck(message: OutboundMessage, disease = "asthma"): Safet
   return result;
 }
 
+export const SAFETY_FALLBACK_TEXT =
+  "I'm not able to answer that in a safe way. Please speak to your healthcare team if you need advice.";
+
+export function applySafetyAction(
+  messages: OutboundMessage[],
+  summary: SafetyResult
+): { messages: OutboundMessage[]; summary: SafetyResult } {
+  // Current rule-based checker only produces approved=false when risk is high.
+  // This path is for future LLM-based classifiers that may return approved=true
+  // with an elevated risk level — in that case we still abort the batch.
+  if (summary.approved && summary.riskLevel === "high") {
+    const first = messages[0];
+    const fallback: OutboundMessage = {
+      userId: first?.userId ?? "",
+      conversationContext: { requiresSession: true, priority: "urgent" },
+      content: { type: "text", text: SAFETY_FALLBACK_TEXT },
+    };
+    return {
+      messages: [fallback],
+      summary: {
+        ...summary,
+        approved: false,
+        blockReason: summary.blockReason ?? "Outbound risk level high after safety review",
+      },
+    };
+  }
+
+  return { messages, summary };
+}
+
 export function loadSafetyRulesForDisease(disease: string): ReturnType<typeof loadSafetyRules> {
   return loadSafetyRules(disease);
 }
