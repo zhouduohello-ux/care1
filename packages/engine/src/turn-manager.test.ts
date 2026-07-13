@@ -26,6 +26,7 @@ import {
   getSessionTurnBudget,
   DEFAULT_MAX_REPROMPTS,
   DEFAULT_SESSION_TURN_BUDGET,
+  shouldDeferOnTimeout,
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
@@ -898,6 +899,39 @@ describe("getSessionTurnBudget", () => {
     expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
     process.env.SESSION_TURN_BUDGET = "1.5";
     expect(getSessionTurnBudget()).toBe(DEFAULT_SESSION_TURN_BUDGET);
+  });
+});
+
+describe("shouldDeferOnTimeout", () => {
+  const originalEnv = process.env.PENDING_QUESTION_TIMEOUT_DEFERS;
+
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.PENDING_QUESTION_TIMEOUT_DEFERS;
+    } else {
+      process.env.PENDING_QUESTION_TIMEOUT_DEFERS = originalEnv;
+    }
+  });
+
+  it("defaults to true", () => {
+    delete process.env.PENDING_QUESTION_TIMEOUT_DEFERS;
+    expect(shouldDeferOnTimeout()).toBe(true);
+  });
+
+  it("reads PENDING_QUESTION_TIMEOUT_DEFERS from environment", () => {
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "false";
+    expect(shouldDeferOnTimeout()).toBe(false);
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "0";
+    expect(shouldDeferOnTimeout()).toBe(false);
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "true";
+    expect(shouldDeferOnTimeout()).toBe(true);
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "1";
+    expect(shouldDeferOnTimeout()).toBe(true);
+  });
+
+  it("falls back to default for invalid values", () => {
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "maybe";
+    expect(shouldDeferOnTimeout()).toBe(true);
   });
 });
 

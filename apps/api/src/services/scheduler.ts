@@ -1,5 +1,5 @@
 import { Prisma, type PrismaClient } from "@carememory/db";
-import { handleCheckInTrigger, scheduleNextCheckInOffset, loadLLMConfig, type QuotaStore } from "@carememory/engine";
+import { handleCheckInTrigger, scheduleNextCheckInOffset, loadLLMConfig, shouldDeferOnTimeout, deferPendingQuestion, type QuotaStore } from "@carememory/engine";
 import type { Redis } from "ioredis";
 import * as Sentry from "@sentry/node";
 import { Job, Queue, Worker } from "bullmq";
@@ -103,46 +103,72 @@ export async function processExpiredPendingQuestions(
   });
 
   for (const checkIn of expired) {
-    const pending = checkIn.pendingQuestion as { topic?: string } | null;
+    const pending = checkIn.pendingQuestion as { topic?: string; purpose?: string; expectedResponseType?: string; options?: string[]; askedAt?: string } | null;
     const topic = pending?.topic;
     if (!topic || !checkIn.cycle) continue;
 
-    await prisma.observation.create({
-      data: {
-        userId: checkIn.cycle.userId,
-        cycleId: checkIn.cycleId,
-        eventId: checkIn.id,
-        timestamp: now,
-        category: "subjective",
-        concept: topic,
-        value: "no_answer",
-        confidence: 1,
-        extractedBy: "rule",
-      },
-    });
+    if (shouldDeferOnTimeout()) {
+      await deferPendingQuestion(
+        prisma,
+        checkIn.id,
+        pending as import("@carememory/engine").PendingQuestion
+      );
+      await prisma.checkIn.update({
+        where: { id: checkIn.id },
+        data: { status: "MISSED" },
+      });
+      await prisma.event.create({
+        data: {
+          userId: checkIn.cycle.userId,
+          cycleId: checkIn.cycleId,
+          checkInId: checkIn.id,
+          type: "state_updated",
+          payload: {
+            reason: "pending_question_deferred_on_timeout",
+            topic,
+            timeoutMs,
+          } as unknown as Prisma.InputJsonValue,
+          timestamp: now,
+        },
+      });
+    } else {
+      await prisma.observation.create({
+        data: {
+          userId: checkIn.cycle.userId,
+          cycleId: checkIn.cycleId,
+          eventId: checkIn.id,
+          timestamp: now,
+          category: "subjective",
+          concept: topic,
+          value: "no_answer",
+          confidence: 1,
+          extractedBy: "rule",
+        },
+      });
 
-    await prisma.checkIn.update({
-      where: { id: checkIn.id },
-      data: {
-        pendingQuestion: Prisma.JsonNull,
-        status: "MISSED",
-      },
-    });
+      await prisma.checkIn.update({
+        where: { id: checkIn.id },
+        data: {
+          pendingQuestion: Prisma.JsonNull,
+          status: "MISSED",
+        },
+      });
 
-    await prisma.event.create({
-      data: {
-        userId: checkIn.cycle.userId,
-        cycleId: checkIn.cycleId,
-        checkInId: checkIn.id,
-        type: "state_updated",
-        payload: {
-          reason: "pending_question_expired",
-          topic,
-          timeoutMs,
-        } as unknown as Prisma.InputJsonValue,
-        timestamp: now,
-      },
-    });
+      await prisma.event.create({
+        data: {
+          userId: checkIn.cycle.userId,
+          cycleId: checkIn.cycleId,
+          checkInId: checkIn.id,
+          type: "state_updated",
+          payload: {
+            reason: "pending_question_expired",
+            topic,
+            timeoutMs,
+          } as unknown as Prisma.InputJsonValue,
+          timestamp: now,
+        },
+      });
+    }
   }
 }
 
