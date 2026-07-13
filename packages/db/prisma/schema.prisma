@@ -96,6 +96,7 @@ model CheckIn {
   repromptCount         Int         @default(0)
   pendingQuestion       Json?
   questionHistory       Json?
+  deferredQuestions     Json?
   nudgeSentAt           DateTime?
   reminderSentAt        DateTime?
   turnCount             Int         @default(0)

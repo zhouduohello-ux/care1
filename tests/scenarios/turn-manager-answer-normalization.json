@@ -1,0 +1,41 @@
+{
+  "id": "turn_manager_answer_normalization",
+  "name": "Turn Manager normalizes text answers before matching",
+  "description": "When a user replies with contractions, extra whitespace, or surrounding punctuation, the system normalizes the text before matching it against option synonyms.",
+  "user": {
+    "phoneNumber": "test_turn_normalization"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "I didn't wake up" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "not_contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "System does not reprompt after a normalized contraction match"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "reliever",
+      "caseInsensitive": true,
+      "description": "System accepts 'didn't wake up' as night_none and moves on"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "Brief",
+      "description": "Session completes and confirms Brief is ready"
+    }
+  ]
+}

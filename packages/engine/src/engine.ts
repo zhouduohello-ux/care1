@@ -1,4 +1,5 @@
 import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
+import { DEFAULT_PLATFORM_CAPABILITIES } from "@carememory/im-core";
 import { generateDiseaseCard } from "@carememory/disease-card";
 import { Prisma } from "@carememory/db";
 import type { Cycle, User, CheckIn } from "@carememory/db";
@@ -8,6 +9,7 @@ import { perceive } from "./perception.js";
 import { safetyCheck } from "./safety.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
+import { combineAdjacentTextMessages } from "./message-batching.js";
 import { createOpenAIClient, type LLMClient, layerProvider } from "./llm.js";
 import {
   pendingQuestionFromPlannerOutput,
@@ -18,11 +20,18 @@ import {
   buildRepromptMessage,
   buildClarificationMessage,
   looksLikeClarificationRequest,
+  looksLikeUncertaintyRequest,
+  buildUncertaintyProbeMessage,
+  recordUncertainAnswer,
   looksLikeSkipRequest,
   recordSkippedQuestion,
+  looksLikeNotApplicableRequest,
+  recordNotApplicableQuestion,
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
+  looksLikeRepeatRequest,
+  buildRepeatMessage,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
   classifyNonAnswer,
@@ -33,8 +42,17 @@ import {
   getLlmAnswerRelevanceThreshold,
   getSessionTurnBudget,
   detectTopicShift,
-  buildTopicShiftAcknowledgementMessage,
-  recordTopicShift,
+  looksLikeSameAsBeforeRequest,
+  findPreviousObservationForTopic,
+  resolveSameAsBeforeValue,
+  buildSameAsBeforeMessage,
+  MAX_REPROMPTS,
+  deferPendingQuestion,
+  popDeferredQuestion,
+  popNextDeferredQuestion,
+  buildDeferredQuestionMessage,
+  loadDeferredQuestionsFromPreviousCheckIn,
+  filterAnsweredDeferredQuestions,
   type PendingQuestion,
   type AnswerConfidenceResult,
 } from "./turn-manager.js";
@@ -327,6 +345,19 @@ export async function handleInbound(
 }
 
 export async function processInbound(
+  context: EngineContext,
+  message: InboundMessage
+): Promise<{ messages: OutboundMessage[]; trace: EngineTrace }> {
+  const result = await processInboundInternal(context, message);
+  return {
+    ...result,
+    messages: combineAdjacentTextMessages(result.messages, {
+      maxBodyLength: DEFAULT_PLATFORM_CAPABILITIES.whatsapp.maxBodyLength,
+    }),
+  };
+}
+
+async function processInboundInternal(
   context: EngineContext,
   message: InboundMessage
 ): Promise<{ messages: OutboundMessage[]; trace: EngineTrace }> {
@@ -855,12 +886,118 @@ export async function processInbound(
 
   // L5 Turn Manager: if there is a pending question and the user did not answer it, reprompt.
   let preOutboundMessages: OutboundMessage[] = [];
+  let topicShiftHandled = false;
   if (activeCheckIn) {
     const { pendingQuestion: pending, repromptCount } = await getTurnState(prisma, activeCheckIn.id);
     const answerEvaluation = pending
       ? evaluateAnswerToPendingQuestion(message, perception, pending, user.locale)
       : undefined;
+
+    // Topic-shift detection: if the user volunteered info about a different
+    // topic instead of answering the pending question, defer the pending
+    // question and let L4 Planner handle the new observation.
     if (pending && answerEvaluation && !answerEvaluation.isAnswer) {
+      const topicShift = detectTopicShift(message, perception, pending);
+      if (topicShift.isShift) {
+        await deferPendingQuestion(prisma, activeCheckIn.id, pending);
+        await prisma.event.create({
+          data: {
+            userId: user.id,
+            cycleId: cycle.id,
+            checkInId: activeCheckIn.id,
+            type: "user_action" as const,
+            payload: {
+              action: "topic_shift",
+              fromTopic: pending.topic,
+              toTopic: topicShift.shiftedToTopic,
+              toObservations: topicShift.shiftedToObservations?.map((o) => o.concept),
+            } as unknown as Prisma.InputJsonValue,
+            timestamp: context.now,
+            traceId: perception.traceId,
+          },
+        });
+        topicShiftHandled = true;
+      }
+    }
+
+    let sameAsBeforeAccepted = false;
+
+    const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
+    const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
+    const renderOptions = {
+      style: conversationStyle,
+      locale: user.locale,
+      cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
+      outOfSession: !isSessionOpen(user, context.now),
+      templateResolver: context.templateResolver,
+      templateContext: {
+        nickname: user.nickname ?? undefined,
+        firstName: user.nickname ?? undefined,
+      },
+    };
+
+    // Same-as-before shortcut: let the user reuse their previous answer for
+    // the pending question when their reply is clearly a "no change" marker.
+    // We only do this when the reply is *not* already accepted as an answer by
+    // the standard matcher, to avoid double-saving on open-text questions.
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer && !topicShiftHandled && looksLikeSameAsBeforeRequest(perception.rawText)) {
+      const previous = await findPreviousObservationForTopic(prisma, cycle.id, pending.topic);
+      const resolved = previous ? resolveSameAsBeforeValue(previous.value, pending, user.locale) : { valid: false as const };
+      if (previous && resolved.valid) {
+        await saveObservations(
+          prisma,
+          user.id,
+          cycle.id,
+          inboundEventId,
+          [
+            {
+              category: "subjective" as const,
+              concept: pending.topic,
+              value: resolved.normalizedValue as Prisma.InputJsonValue,
+              confidence: 0.95,
+              extractedBy: "rule" as const,
+              attributes: {
+                matchMethod: "same_as_before",
+                previousObservationId: previous.observationId,
+              },
+            },
+          ],
+          context.now
+        );
+        await clearPendingQuestion(prisma, activeCheckIn.id);
+        await prisma.event.update({
+          where: { id: inboundEventId },
+          data: {
+            payload: {
+              ...perception,
+              turnManager: {
+                pendingTopic: pending.topic,
+                matchConfidence: 0.95,
+                matchMethod: "same_as_before",
+              },
+            } as unknown as Prisma.InputJsonValue,
+          },
+        });
+
+        const sameAsBeforeMessage = await buildSameAsBeforeMessage(userId, pending, renderOptions);
+        const { messages: safeSameAsBeforeMessages } = safetyWrapWithSummary(userId, [sameAsBeforeMessage]);
+        await saveOutboundMessages(
+          prisma,
+          user.id,
+          safeSameAsBeforeMessages,
+          cycle.id,
+          new Date(),
+          inboundEventId,
+          perception.traceId,
+          activeCheckIn.id
+        );
+        preOutboundMessages.push(...safeSameAsBeforeMessages);
+        sameAsBeforeAccepted = true;
+        // Fall through to L4 Planner so it can ask the next question.
+      }
+    }
+
+    if (pending && answerEvaluation && !answerEvaluation.isAnswer && !topicShiftHandled && !sameAsBeforeAccepted) {
       const nextRepromptCount = repromptCount + 1;
 
       if (nextRepromptCount > getMaxReprompts()) {
@@ -885,19 +1022,41 @@ export async function processInbound(
         );
         await clearPendingQuestion(prisma, activeCheckIn.id);
       } else {
-          const conversationStyle = (getBucket(userId, "conversation_style").variant as "v1" | "v2") ?? "v1";
-          const cycleDay = Math.floor((context.now.getTime() - cycle.startedAt.getTime()) / (1000 * 60 * 60 * 24));
-          const renderOptions = {
-            style: conversationStyle,
-            locale: user.locale,
-            cycleContext: { cycleType: cycle.type, cycleDay, briefReady: true },
-            outOfSession: !isSessionOpen(user, context.now),
-            templateResolver: context.templateResolver,
-            templateContext: {
-              nickname: user.nickname ?? undefined,
-              firstName: user.nickname ?? undefined,
-            },
-          };
+          // Repeat / rephrase request: re-ask the pending question without
+          // counting it as a failed reprompt or clarification. This keeps the
+          // conversation moving when the user simply missed the message.
+          if (looksLikeRepeatRequest(perception.rawText)) {
+            const repeatMessage = await buildRepeatMessage(userId, pending, renderOptions);
+            const { messages, summary } = safetyWrapWithSummary(userId, [repeatMessage]);
+            await saveOutboundMessages(
+              prisma,
+              user.id,
+              messages,
+              cycle.id,
+              new Date(),
+              inboundEventId,
+              perception.traceId,
+              activeCheckIn.id
+            );
+            await prisma.event.create({
+              data: {
+                userId: user.id,
+                cycleId: cycle.id,
+                checkInId: activeCheckIn.id,
+                type: "turn_reprompt" as const,
+                payload: {
+                  topic: pending.topic,
+                  action: "repeat",
+                } as unknown as Prisma.InputJsonValue,
+                timestamp: context.now,
+                traceId: perception.traceId,
+              },
+            });
+            return {
+              messages,
+              trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+            };
+          }
 
           // Clarification request: explain the question in simpler terms without
           // counting it as a failed reprompt attempt. Track repeated clarifications
@@ -976,11 +1135,76 @@ export async function processInbound(
                 trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
               };
             }
+          } else if (looksLikeUncertaintyRequest(perception.rawText)) {
+            // Uncertainty request: the user says they don't know the answer.
+            // Probe once without consuming a reprompt; if they repeat it, treat
+            // as an explicit uncertain answer and move on.
+            const uncertaintyCount = pending.uncertaintyCount ?? 0;
+            if (uncertaintyCount >= 1) {
+              await recordUncertainAnswer(
+                prisma,
+                user.id,
+                cycle.id,
+                activeCheckIn.id,
+                pending,
+                inboundEventId,
+                context.now,
+                perception.traceId
+              );
+              // Fall through to L4 Planner so it can ask the next question.
+            } else {
+              const probe = await buildUncertaintyProbeMessage(userId, pending, renderOptions, uncertaintyCount);
+              await prisma.checkIn.update({
+                where: { id: activeCheckIn.id },
+                data: {
+                  pendingQuestion: {
+                    ...pending,
+                    uncertaintyCount: uncertaintyCount + 1,
+                  } as unknown as Prisma.InputJsonValue,
+                },
+              });
+              await prisma.event.create({
+                data: {
+                  userId: user.id,
+                  cycleId: cycle.id,
+                  checkInId: activeCheckIn.id,
+                  type: "turn_reprompt" as const,
+                  payload: {
+                    topic: pending.topic,
+                    action: "uncertainty_probe",
+                    uncertaintyCount: uncertaintyCount + 1,
+                  } as unknown as Prisma.InputJsonValue,
+                  timestamp: context.now,
+                  traceId: perception.traceId,
+                },
+              });
+              const { messages, summary } = safetyWrapWithSummary(userId, [probe]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
+              return {
+                messages,
+                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+              };
+            }
           } else if (looksLikeSkipRequest(perception.rawText)) {
             // Skip request: the user explicitly wants to skip this question.
             // Record a no_answer observation, clear the pending question, and let
             // the planner move on to the next topic.
             await recordSkippedQuestion(
+              prisma,
+              user.id,
+              cycle.id,
+              activeCheckIn.id,
+              pending,
+              inboundEventId,
+              context.now,
+              perception.traceId
+            );
+            // Fall through to L4 Planner so it can ask the next question.
+          } else if (looksLikeNotApplicableRequest(perception.rawText)) {
+            // Not-applicable request: the user indicates the question doesn't
+            // apply to them. Record a distinct no_answer reason so analytics can
+            // tell it apart from a skipped or unanswered question.
+            await recordNotApplicableQuestion(
               prisma,
               user.id,
               cycle.id,
@@ -1100,117 +1324,78 @@ export async function processInbound(
               }
             }
 
-            // Topic shift: the user did not answer the pending question but
-            // introduced a new, relevant observation. Acknowledge it, record the
-            // pending question as no_answer, and let L4 Planner continue with the
-            // new context instead of reprompting.
-            const topicShift = detectTopicShift(perception, pending, answerEvaluation);
-            if (topicShift.isTopicShift) {
-              await recordTopicShift(
+            // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
+            // accept it and move on instead of reprompting. The LLM must meet a configurable confidence threshold.
+            const dialogueLlmClient = resolveLlmClient(context, "dialogue");
+            let acceptedByLlm = false;
+            if (allowLlm && dialogueLlmClient) {
+              const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
+              const threshold = getLlmAnswerRelevanceThreshold();
+              if (relevance.isAnswer && relevance.confidence >= threshold) {
+                await saveObservations(
+                  prisma,
+                  user.id,
+                  cycle.id,
+                  inboundEventId,
+                  [
+                    {
+                      category: "subjective",
+                      concept: pending.topic,
+                      value: message.content.text ?? "yes",
+                      confidence: relevance.confidence,
+                      extractedBy: "llm",
+                      attributes: { matchMethod: "llm", llmReasoning: relevance.reasoning },
+                    },
+                  ],
+                  context.now
+                );
+                await clearPendingQuestion(prisma, activeCheckIn.id);
+                acceptedByLlm = true;
+              } else if (relevance.isAnswer) {
+                // LLM thought it was an answer but confidence was below threshold: log for analysis but still reprompt.
+                await prisma.event.create({
+                  data: {
+                    userId: user.id,
+                    cycleId: cycle.id,
+                    checkInId: activeCheckIn.id,
+                    type: "turn_reprompt" as const,
+                    payload: {
+                      topic: pending.topic,
+                      action: "llm_rejected_low_confidence",
+                      confidence: relevance.confidence,
+                      threshold,
+                      reasoning: relevance.reasoning,
+                    } as unknown as Prisma.InputJsonValue,
+                    timestamp: context.now,
+                    traceId: perception.traceId,
+                  },
+                });
+              }
+            }
+
+            if (!acceptedByLlm) {
+              const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
+              const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
+              await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
+              await recordReprompt(
                 prisma,
                 user.id,
                 cycle.id,
                 activeCheckIn.id,
                 pending,
-                topicShift.shiftedObservations,
-                inboundEventId,
+                nextRepromptCount,
+                classifyNonAnswer(perception),
                 context.now,
                 perception.traceId
               );
-
-              const acknowledgement = await buildTopicShiftAcknowledgementMessage(
-                userId,
-                pending,
-                topicShift.shiftedObservations,
-                renderOptions
-              );
-              const { messages: ackMessages } = safetyWrapWithSummary(userId, [acknowledgement]);
-              await saveOutboundMessages(
-                prisma,
-                user.id,
-                ackMessages,
-                cycle.id,
-                new Date(),
-                inboundEventId,
-                perception.traceId,
-                activeCheckIn.id
-              );
-              preOutboundMessages = ackMessages;
-              // Fall through to L4 Planner so it can ask the next question.
-            } else {
-              // Optional LLM fallback: if the LLM thinks the reply is actually an answer in natural language,
-              // accept it and move on instead of reprompting. The LLM must meet a configurable confidence threshold.
-              const dialogueLlmClient = resolveLlmClient(context, "dialogue");
-              let acceptedByLlm = false;
-              if (allowLlm && dialogueLlmClient) {
-                const relevance = await isAnswerRelevantWithLlm(message, perception, pending, dialogueLlmClient, auditLlmCall);
-                const threshold = getLlmAnswerRelevanceThreshold();
-                if (relevance.isAnswer && relevance.confidence >= threshold) {
-                  await saveObservations(
-                    prisma,
-                    user.id,
-                    cycle.id,
-                    inboundEventId,
-                    [
-                      {
-                        category: "subjective",
-                        concept: pending.topic,
-                        value: message.content.text ?? "yes",
-                        confidence: relevance.confidence,
-                        extractedBy: "llm",
-                        attributes: { matchMethod: "llm", llmReasoning: relevance.reasoning },
-                      },
-                    ],
-                    context.now
-                  );
-                  await clearPendingQuestion(prisma, activeCheckIn.id);
-                  acceptedByLlm = true;
-                } else if (relevance.isAnswer) {
-                  // LLM thought it was an answer but confidence was below threshold: log for analysis but still reprompt.
-                  await prisma.event.create({
-                    data: {
-                      userId: user.id,
-                      cycleId: cycle.id,
-                      checkInId: activeCheckIn.id,
-                      type: "turn_reprompt" as const,
-                      payload: {
-                        topic: pending.topic,
-                        action: "llm_rejected_low_confidence",
-                        confidence: relevance.confidence,
-                        threshold,
-                        reasoning: relevance.reasoning,
-                      } as unknown as Prisma.InputJsonValue,
-                      timestamp: context.now,
-                      traceId: perception.traceId,
-                    },
-                  });
-                }
-              }
-
-              if (!acceptedByLlm) {
-                const reprompt = await buildRepromptMessage(userId, pending, nextRepromptCount, renderOptions);
-                const { messages, summary } = safetyWrapWithSummary(userId, [reprompt]);
-                await saveOutboundMessages(prisma, user.id, messages, cycle.id, new Date(), inboundEventId, perception.traceId, activeCheckIn?.id);
-                await recordReprompt(
-                  prisma,
-                  user.id,
-                  cycle.id,
-                  activeCheckIn.id,
-                  pending,
-                  nextRepromptCount,
-                  classifyNonAnswer(perception),
-                  context.now,
-                  perception.traceId
-                );
-                return {
-                  messages,
-                  trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
-                };
-              }
+              return {
+                messages,
+                trace: { perception, planner: emptyPlannerOutput(messages[0].content.text), safety: summary },
+              };
             }
           }
         }
-    } else if (pending && answerEvaluation?.isAnswer) {
+    } else if (pending && answerEvaluation?.isAnswer && !topicShiftHandled) {
       // The user answered the pending question. Capture the match quality on the
       // inbound event for analytics, but do not rewrite perception observations here.
       await prisma.event.update({
@@ -1282,11 +1467,21 @@ export async function processInbound(
   }
 
   // L4 Planner
+  // Re-fetch the active check-in so that any Turn Manager mutations
+  // (deferred questions, reprompt count, exception mode) are visible.
+  if (activeCheckIn) {
+    activeCheckIn = await prisma.checkIn.findUnique({
+      where: { id: activeCheckIn.id },
+    });
+  }
   const latestNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
     orderBy: { generatedAt: "desc" },
   });
   const recentObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn?.sentAt ?? undefined);
+  const deferredTopics = (
+    (activeCheckIn?.deferredQuestions as unknown as Array<{ topic: string }> | undefined) ?? []
+  ).map((d) => d.topic);
   const plannerInput = {
     patientContext: {
       disease: cycle.disease,
@@ -1307,6 +1502,7 @@ export async function processInbound(
       inExceptionMode: activeCheckIn?.inExceptionMode ?? false,
       exceptionQuestionsAsked: activeCheckIn?.exceptionQuestionsAsked ?? 0,
       conversationStyle: getBucket(userId, "conversation_style").variant,
+      deferredTopics,
     },
     temporalContext: {
       localTime: context.now.toISOString(),
@@ -1338,6 +1534,48 @@ export async function processInbound(
       safetyFlag: "none",
       updatePatientState: { updateNarrative: true },
     };
+  }
+
+  // L5 deferred question re-raise: if the planner is ready to close the session
+  // but we still have budget and there are deferred questions from earlier
+  // topic shifts, ask the oldest deferred question before closing.
+  if (
+    activeCheckIn &&
+    plannerOutput.nextAction.type === "end_session" &&
+    (turnsRemaining === undefined || turnsRemaining > 1)
+  ) {
+    const deferredQuestion = await popNextDeferredQuestion(prisma, activeCheckIn.id, recentObservations);
+    if (deferredQuestion) {
+      await prisma.event.create({
+        data: {
+          userId: user.id,
+          cycleId: cycle.id,
+          checkInId: activeCheckIn.id,
+          type: "user_action" as const,
+          payload: {
+            action: "deferred_question_reraised",
+            topic: deferredQuestion.topic,
+            expectedResponseType: deferredQuestion.expectedResponseType,
+          } as unknown as Prisma.InputJsonValue,
+          timestamp: context.now,
+          traceId: perception.traceId,
+        },
+      });
+      plannerOutput = {
+        reasoning: "Re-raising a deferred question before closing the session.",
+        sessionObjective: deferredQuestion.purpose,
+        nextAction: {
+          type: "ask",
+          topic: deferredQuestion.topic,
+          purpose: `Before we finish: ${deferredQuestion.purpose}`,
+          expectedResponseType: deferredQuestion.expectedResponseType,
+          options: deferredQuestion.options,
+          budgetCost: 0,
+        },
+        safetyFlag: "none",
+        updatePatientState: {},
+      };
+    }
   }
 
   // L5 Dialogue
@@ -1501,6 +1739,23 @@ export async function handleCheckInTrigger(
 
   const recentObservations = await getRecentObservations(prisma, cycle.userId, cycle.id, checkIn.scheduledAt ?? undefined);
 
+  // Carry forward deferred questions from the previous check-in in this cycle,
+  // filtering out any topics that have already been answered since they were deferred.
+  const inheritedDeferred = filterAnsweredDeferredQuestions(
+    await loadDeferredQuestionsFromPreviousCheckIn(prisma, cycle.id, checkIn.id),
+    recentObservations
+  );
+  if (inheritedDeferred.length > 0) {
+    await prisma.checkIn.update({
+      where: { id: checkIn.id },
+      data: {
+        deferredQuestions: inheritedDeferred as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  const deferredTopics = inheritedDeferred.map((d) => d.topic);
+
   const cycleNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
     orderBy: { generatedAt: "desc" },
@@ -1525,6 +1780,7 @@ export async function handleCheckInTrigger(
       inExceptionMode: false,
       exceptionQuestionsAsked: 0,
       conversationStyle: getBucket(cycle.user.phoneNumber, "conversation_style").variant,
+      deferredTopics,
     },
     temporalContext: {
       localTime: context.now.toISOString(),
@@ -1535,9 +1791,47 @@ export async function handleCheckInTrigger(
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, cycle.userId, cycle.id, plannerOutput);
 
+  // If we inherited deferred questions from a previous check-in, ask the oldest
+  // one first at the start of this new session before falling back to the
+  // planner's normal next question.
+  let effectivePlannerOutput = plannerOutput;
+  if (inheritedDeferred.length > 0) {
+    const nextDeferred = await popDeferredQuestion(prisma, checkIn.id);
+    if (nextDeferred) {
+      await prisma.event.create({
+        data: {
+          userId: cycle.userId,
+          cycleId: cycle.id,
+          checkInId: checkIn.id,
+          type: "user_action" as const,
+          payload: {
+            action: "deferred_question_inherited",
+            topic: nextDeferred.topic,
+            expectedResponseType: nextDeferred.expectedResponseType,
+          } as unknown as Prisma.InputJsonValue,
+          timestamp: context.now,
+        },
+      });
+      effectivePlannerOutput = {
+        reasoning: "Re-raising a deferred question from a previous check-in at the start of the new session.",
+        sessionObjective: nextDeferred.purpose,
+        nextAction: {
+          type: "ask",
+          topic: nextDeferred.topic,
+          purpose: `Before we move on: ${nextDeferred.purpose}`,
+          expectedResponseType: nextDeferred.expectedResponseType,
+          options: nextDeferred.options,
+          budgetCost: 0,
+        },
+        safetyFlag: "none",
+        updatePatientState: {},
+      };
+    }
+  }
+
   let outbound: OutboundMessage;
   try {
-    outbound = await renderMessage(cycle.user.phoneNumber, plannerOutput, {
+    outbound = await renderMessage(cycle.user.phoneNumber, effectivePlannerOutput, {
       style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
       locale: cycle.user.locale,
       cycleContext: {
@@ -1556,7 +1850,7 @@ export async function handleCheckInTrigger(
     console.error("L5 render failed in handleCheckInTrigger, falling back to safe message", {
       userId: cycle.user.phoneNumber,
       cycleId: cycle.id,
-      nextAction: plannerOutput.nextAction,
+      nextAction: effectivePlannerOutput.nextAction,
       error: err instanceof Error ? err.message : String(err),
     });
     outbound = {
@@ -1580,7 +1874,7 @@ export async function handleCheckInTrigger(
     checkIn.id
   );
 
-  const pending = pendingQuestionFromPlannerOutput(plannerOutput);
+  const pending = pendingQuestionFromPlannerOutput(effectivePlannerOutput);
   if (pending) {
     await setPendingQuestion(prisma, checkIn.id, pending);
   }
@@ -1605,7 +1899,7 @@ export async function handleCheckInTrigger(
     where: { id: checkIn.id },
     data: {
       questionsAsked: { increment: 1 },
-      budgetRemaining: { decrement: plannerOutput.nextAction.budgetCost },
+      budgetRemaining: { decrement: effectivePlannerOutput.nextAction.budgetCost },
     },
   });
 
@@ -1616,5 +1910,7 @@ export async function handleCheckInTrigger(
     data: { nextCheckinAt },
   });
 
-  return messages;
+  return combineAdjacentTextMessages(messages, {
+    maxBodyLength: DEFAULT_PLATFORM_CAPABILITIES.whatsapp.maxBodyLength,
+  });
 }

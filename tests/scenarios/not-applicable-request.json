@@ -1,0 +1,35 @@
+{
+  "id": "not_applicable_request",
+  "name": "L5 not-applicable request marks question as no_answer",
+  "description": "When a user replies 'not applicable' / 'N/A' to a pending question, the system records a no_answer observation with reason not_applicable and moves on.",
+  "user": {
+    "phoneNumber": "test_not_applicable"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "send", "text": "not applicable" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "not_contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "Not-applicable request is not treated as a reprompt"
+    },
+    {
+      "afterStep": 5,
+      "type": "observation",
+      "op": "exists",
+      "filter": {
+        "concept": "reliever_use",
+        "value": "no_answer"
+      },
+      "description": "Not-applicable request records no_answer for reliever_use"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "id": "turn_manager_uncertainty",
+  "name": "Turn Manager handles uncertainty without consuming reprompt budget",
+  "description": "When the user says they don't know the answer to a pending question, the system sends a soft probe once without counting it as a failed reprompt. If the user repeats the uncertainty, the system records an uncertain observation and moves on.",
+  "user": {
+    "phoneNumber": "test_turn_uncertainty"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "send", "text": "I don't know" },
+    { "action": "send", "text": "I don't know" },
+    { "action": "reply", "buttonId": "reliever_0" },
+    { "action": "reply", "buttonId": "activity_no" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "if you're not sure",
+      "caseInsensitive": true,
+      "description": "System sends a soft uncertainty probe after first 'I don't know'"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "contains",
+      "value": "SKIP",
+      "description": "Probe offers SKIP option"
+    },
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "reliever",
+      "caseInsensitive": true,
+      "description": "After repeated uncertainty, system moves to the next question"
+    },
+    {
+      "afterStep": 7,
+      "type": "message",
+      "op": "contains",
+      "value": "Brief",
+      "description": "Session completes and confirms Brief is ready"
+    }
+  ]
+}

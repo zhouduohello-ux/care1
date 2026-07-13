@@ -2,7 +2,7 @@ import type { InboundMessage, OutboundMessage } from "@carememory/im-core";
 import { Prisma, type PrismaClient, type ObservationCategory } from "@carememory/db";
 import type { Observation, PlannerOutput, PerceptionResult } from "./types.js";
 import { renderMessage, type RenderOptions } from "./dialogue.js";
-import { matchOptionSynonym, matchScaleWord, getLocale, type DialogueLocale } from "./dialogue-locales/index.js";
+import { matchOptionSynonym, matchScaleWord, getLocale, normalizeAnswerText, type DialogueLocale } from "./dialogue-locales/index.js";
 import type { LLMClient, LLMMessage } from "./llm.js";
 import type { LlmAuditCallback } from "./perception.js";
 
@@ -14,6 +14,8 @@ export interface PendingQuestion {
   askedAt: string;
   /** Number of clarification messages already sent for this pending question. */
   clarificationCount?: number;
+  /** Number of uncertainty probes already sent for this pending question. */
+  uncertaintyCount?: number;
 }
 
 export interface TurnState {
@@ -47,6 +49,27 @@ export const DEFAULT_SESSION_TURN_BUDGET = 12;
 /** Session turn budget; configurable via SESSION_TURN_BUDGET. */
 export function getSessionTurnBudget(): number {
   return parseIntEnv("SESSION_TURN_BUDGET", DEFAULT_SESSION_TURN_BUDGET);
+}
+
+function parseBoolEnv(name: string, fallback: boolean): boolean {
+  const raw = process.env[name];
+  if (!raw) return fallback;
+  const lowered = raw.trim().toLowerCase();
+  if (lowered === "true" || lowered === "1" || lowered === "yes") return true;
+  if (lowered === "false" || lowered === "0" || lowered === "no") return false;
+  console.warn(`[turn-manager] Invalid ${name}="${raw}"; using fallback ${fallback}`);
+  return fallback;
+}
+
+/**
+ * Whether an unanswered pending question should be deferred to the next check-in
+ * when it hits the 24h timeout, instead of being recorded as `no_answer`.
+ *
+ * Configurable via `PENDING_QUESTION_TIMEOUT_DEFERS`. Defaults to `true` so that
+ * questions are not lost when a patient is temporarily unavailable.
+ */
+export function shouldDeferOnTimeout(): boolean {
+  return parseBoolEnv("PENDING_QUESTION_TIMEOUT_DEFERS", true);
 }
 
 /** @deprecated Use {@link getMaxReprompts} instead. */
@@ -111,6 +134,7 @@ export interface AnswerConfidenceResult {
   matchMethod:
     | "exact_option"
     | "synonym"
+    | "fuzzy_synonym"
     | "scale_number"
     | "scale_word"
     | "text_observation"
@@ -123,11 +147,107 @@ export interface AnswerConfidenceResult {
 }
 
 /**
+ * Compute the Levenshtein edit distance between two strings.
+ *
+ * This is used for fuzzy option matching: a patient might type "midl" when
+ * they mean "mild", or "limitted" when they mean "limited".
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  // Use two rows to keep O(min(m, n)) space.
+  const previous = new Array(n + 1).fill(0);
+  const current = new Array(n + 1).fill(0);
+
+  for (let j = 0; j <= n; j++) {
+    previous[j] = j;
+  }
+
+  for (let i = 1; i <= m; i++) {
+    current[0] = i;
+    const ca = a[i - 1];
+    for (let j = 1; j <= n; j++) {
+      const cb = b[j - 1];
+      const insert = previous[j] + 1;
+      const del = current[j - 1] + 1;
+      const substitute = previous[j - 1] + (ca === cb ? 0 : 1);
+      current[j] = Math.min(insert, del, substitute);
+    }
+    for (let j = 0; j <= n; j++) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[n];
+}
+
+/** Maximum allowed edit-distance ratio for a fuzzy option match. */
+const DEFAULT_FUZZY_MATCH_RATIO = 0.25;
+
+interface FuzzyMatchResult {
+  optionId: string;
+  confidence: number;
+}
+
+/**
+ * Try to fuzzy-match a token against option IDs, labels, and synonyms.
+ *
+ * Returns the best matching option ID if the Levenshtein distance is within
+ * the configured ratio of the candidate length. Short tokens (< 4 chars) are
+ * not fuzzy-matched to avoid false positives.
+ */
+function findFuzzyOptionMatch(
+  token: string,
+  options: string[],
+  locale?: DialogueLocale,
+  ratio = DEFAULT_FUZZY_MATCH_RATIO
+): FuzzyMatchResult | undefined {
+  if (token.length < 4) return undefined;
+
+  let best: FuzzyMatchResult | undefined;
+  let bestDistance = Infinity;
+
+  const candidates: Array<{ optionId: string; text: string }> = [];
+  for (const optionId of options) {
+    candidates.push({ optionId, text: optionId });
+    if (locale) {
+      const labels = locale.optionLabels[optionId] ?? [];
+      for (const label of labels) {
+        candidates.push({ optionId, text: label });
+      }
+      const synonyms = locale.optionSynonyms?.[optionId] ?? [];
+      for (const synonym of synonyms) {
+        candidates.push({ optionId, text: synonym });
+      }
+    }
+  }
+
+  for (const { optionId, text } of candidates) {
+    const normalized = text.toLowerCase();
+    if (normalized.length === 0) continue;
+    const distance = levenshteinDistance(token, normalized);
+    const maxAllowed = Math.max(1, Math.floor(normalized.length * ratio));
+    if (distance <= maxAllowed && distance < bestDistance) {
+      bestDistance = distance;
+      // Confidence decreases as distance grows: 0.85 at distance 0, 0.75 at max allowed.
+      const confidence = Math.max(0.75, 0.85 - distance * 0.05);
+      best = { optionId, confidence };
+    }
+  }
+
+  return best;
+}
+
+/**
  * Evaluate whether a user reply answers the pending question and score the confidence.
  *
  * Confidence scoring reflects match quality:
  * - Exact option/button/list match: 1.0
  * - Synonym or scale-word match: 0.9
+ * - Fuzzy synonym match (typo-tolerant): 0.75-0.85
  * - Scale number: 1.0
  * - Text question with a topic observation from perception: 0.8
  * - Text question without a topic observation: 0.6
@@ -180,7 +300,7 @@ export function evaluateAnswerToPendingQuestion(
     }
   }
 
-  const text = (message.content.text ?? "").trim().toLowerCase();
+  const text = normalizeAnswerText(message.content.text ?? "");
 
   if (pending.expectedResponseType === "scale") {
     if (/^[1-5]$/.test(text)) {
@@ -199,6 +319,16 @@ export function evaluateAnswerToPendingQuestion(
       const matched = options.some((optionId) => matchOptionSynonym(locale, optionId, text));
       if (matched) {
         return { isAnswer: true, confidence: 0.9, matchMethod: "synonym", reasoning: "option synonym match" };
+      }
+      // Fuzzy / typo-tolerant matching against option IDs, labels, and synonyms.
+      const fuzzy = findFuzzyOptionMatch(text, options, locale);
+      if (fuzzy) {
+        return {
+          isAnswer: true,
+          confidence: fuzzy.confidence,
+          matchMethod: "fuzzy_synonym",
+          reasoning: `fuzzy match to option ${fuzzy.optionId}`,
+        };
       }
     }
   }
@@ -333,122 +463,6 @@ Perception extracted observations: [{"concept":"activity_limitation","value":"ye
   }
 }
 
-export function detectTopicShift(
-  perception: PerceptionResult,
-  pending: PendingQuestion,
-  answerEvaluation: AnswerConfidenceResult
-): { isTopicShift: boolean; shiftedObservations: Observation[] } {
-  if (answerEvaluation.isAnswer) {
-    return { isTopicShift: false, shiftedObservations: [] };
-  }
-
-  const nonAnswerIntents = new Set([
-    "question",
-    "help",
-    "stop",
-    "delete_data",
-    "export_data",
-    "continue_cycle",
-    "initiate",
-    "correction",
-  ]);
-  if (nonAnswerIntents.has(perception.intent.primary)) {
-    return { isTopicShift: false, shiftedObservations: [] };
-  }
-
-  const nonInformativeConcepts = new Set([
-    "uncertainty",
-    "unknown",
-    "dont_know",
-    "not_sure",
-    "no_information",
-    "unsure",
-    "no_answer",
-  ]);
-
-  const shifted = perception.extractedObservations.filter(
-    (o) => o.concept !== pending.topic && !nonInformativeConcepts.has(o.concept)
-  );
-  if (shifted.length === 0) {
-    return { isTopicShift: false, shiftedObservations: [] };
-  }
-
-  return { isTopicShift: true, shiftedObservations: shifted };
-}
-
-export async function buildTopicShiftAcknowledgementMessage(
-  userId: string,
-  pending: PendingQuestion,
-  shiftedObservations: Observation[],
-  options: RenderOptions
-): Promise<OutboundMessage> {
-  const concepts = shiftedObservations.map((o) => String(o.concept).replace(/_/g, " "));
-  const uniqueConcepts = Array.from(new Set(concepts));
-  const conceptText = uniqueConcepts.join(", ");
-
-  const purpose = `Noted — thanks for mentioning ${conceptText}. I'll move on and come back to this if needed.`;
-
-  const acknowledgementOutput: PlannerOutput = {
-    reasoning: "User introduced a new topic instead of answering the pending question; acknowledging and moving on.",
-    sessionObjective: pending.purpose,
-    nextAction: {
-      type: "inform",
-      topic: "topic_shift_acknowledgement",
-      purpose,
-      budgetCost: 0,
-    },
-    safetyFlag: "none",
-    updatePatientState: {},
-  };
-
-  return renderMessage(userId, acknowledgementOutput, options);
-}
-
-export async function recordTopicShift(
-  prisma: PrismaClient,
-  userId: string,
-  cycleId: string,
-  checkInId: string,
-  pending: PendingQuestion,
-  shiftedObservations: Observation[],
-  eventId: string,
-  now: Date,
-  traceId?: string
-): Promise<void> {
-  await prisma.observation.create({
-    data: {
-      userId,
-      cycleId,
-      eventId,
-      timestamp: now,
-      category: "subjective" as ObservationCategory,
-      concept: pending.topic,
-      value: "no_answer" as Prisma.InputJsonValue,
-      attributes: { reason: "topic_shift" } as Prisma.InputJsonValue,
-      confidence: 1,
-      extractedBy: "rule",
-    },
-  });
-
-  await clearPendingQuestion(prisma, checkInId);
-
-  await prisma.event.create({
-    data: {
-      userId,
-      cycleId,
-      checkInId,
-      type: "user_action" as const,
-      payload: {
-        action: "topic_shift",
-        topic: pending.topic,
-        expectedResponseType: pending.expectedResponseType,
-        shiftedConcepts: shiftedObservations.map((o) => o.concept),
-      } as unknown as Prisma.InputJsonValue,
-      timestamp: now,
-      traceId,
-    },
-  });
-}
 export function classifyNonAnswer(perception: PerceptionResult): string {
   const nonAnswerIntents = new Set([
     "question",
@@ -609,7 +623,8 @@ export function extractMultiSelectAnswers(
   localeCode?: string
 ): ExtractedAnswers {
   const locale = localeCode ? getLocale(localeCode) : undefined;
-  const lowerText = text.toLowerCase();
+  const normalizedText = normalizeAnswerText(text);
+  const lowerText = normalizedText.toLowerCase();
 
   // Try whole-phrase synonym matches first (e.g. "chest tightness" before splitting).
   const matchedSet = new Set<string>();
@@ -622,7 +637,7 @@ export function extractMultiSelectAnswers(
   }
 
   // Tokenize for per-token matching.
-  const tokens = text
+  const tokens = normalizedText
     .split(/,|\band\b|\bor\b|\s+/i)
     .map((t) => t.trim())
     .filter(Boolean);
@@ -639,6 +654,15 @@ export function extractMultiSelectAnswers(
         matchedSet.add(optionId);
         tokenMatched = true;
         break;
+      }
+      // Try fuzzy matching for longer tokens (e.g. "limitted" -> "limited").
+      if (locale && token.length >= 4) {
+        const fuzzy = findFuzzyOptionMatch(token, [optionId], locale);
+        if (fuzzy) {
+          matchedSet.add(fuzzy.optionId);
+          tokenMatched = true;
+          break;
+        }
       }
     }
 
@@ -901,6 +925,99 @@ function buildExampleAnswer(pending: PendingQuestion, locale: DialogueLocale): s
   return undefined;
 }
 
+const UNCERTAINTY_PATTERNS = [
+  /i don't know/i,
+  /i do not know/i,
+  /not sure/i,
+  /no idea/i,
+  /can't remember/i,
+  /cannot remember/i,
+  /can't recall/i,
+  /cannot recall/i,
+  /unsure/i,
+  /^idk$/i,
+];
+
+export function looksLikeUncertaintyRequest(text: string): boolean {
+  return UNCERTAINTY_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function buildUncertaintyProbeMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions,
+  uncertaintyCount = 0
+): Promise<OutboundMessage> {
+  const purpose = pending.purpose.replace(/\?$/, "").trim();
+  let text: string;
+  if (uncertaintyCount === 0) {
+    text = `No problem — if you're not sure about ${purpose.toLowerCase()}, just take your best guess, or reply SKIP to move on.`;
+  } else {
+    text = `That's okay — reply SKIP if you'd rather move on, and we can come back to this another time.`;
+  }
+
+  const probeOutput: PlannerOutput = {
+    reasoning: "User expressed uncertainty about the pending question; sending a soft probe.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: text,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, probeOutput, options);
+}
+
+export async function recordUncertainAnswer(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  eventId: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.observation.create({
+    data: {
+      userId,
+      cycleId,
+      eventId,
+      timestamp: now,
+      category: "subjective" as ObservationCategory,
+      concept: pending.topic,
+      value: "uncertain" as Prisma.InputJsonValue,
+      attributes: { reason: "user_uncertain" } as Prisma.InputJsonValue,
+      confidence: 1,
+      extractedBy: "rule",
+    },
+  });
+
+  await clearPendingQuestion(prisma, checkInId);
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "user_action" as const,
+      payload: {
+        action: "uncertain_answer",
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
+}
+
 const SKIP_PATTERNS = [
   /^skip$/i,
   /skip this question/i,
@@ -1032,6 +1149,274 @@ export async function buildPreviousQuestionMessage(
   return renderMessage(userId, previousOutput, options);
 }
 
+const SAME_AS_BEFORE_PATTERNS = [
+  /^same$/i,
+  /^same as before$/i,
+  /^same as last time$/i,
+  /^same as usual$/i,
+  /^no change$/i,
+  /^nothing changed$/i,
+  /^nothing new$/i,
+  /^as before$/i,
+];
+
+export function looksLikeSameAsBeforeRequest(text: string): boolean {
+  return SAME_AS_BEFORE_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export interface PreviousObservationValue {
+  value: unknown;
+  observationId: string;
+}
+
+export async function findPreviousObservationForTopic(
+  prisma: PrismaClient,
+  cycleId: string,
+  topic: string
+): Promise<PreviousObservationValue | undefined> {
+  const observation = await prisma.observation.findFirst({
+    where: {
+      cycleId,
+      concept: topic,
+      superseded: false,
+    },
+    orderBy: { timestamp: "desc" },
+    select: { id: true, value: true },
+  });
+  if (!observation) return undefined;
+  return { value: observation.value, observationId: observation.id };
+}
+
+function normalizeTextValue(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s+]/g, "").trim();
+}
+
+function resolveOptionIdFromPreviousValue(
+  locale: DialogueLocale,
+  topic: string,
+  options: string[],
+  value: string
+): string | undefined {
+  const normalizedValue = normalizeTextValue(value);
+
+  for (let idx = 0; idx < options.length; idx++) {
+    const optionId = options[idx];
+    if (normalizeTextValue(optionId) === normalizedValue) return optionId;
+    if (matchOptionSynonym(locale, optionId, value)) return optionId;
+
+    const labels = locale.optionLabels[topic];
+    const label = labels?.[idx];
+    if (label && normalizeTextValue(label) === normalizedValue) return optionId;
+  }
+
+  return undefined;
+}
+
+function resolveSingleChoicePreviousValue(
+  value: unknown,
+  pending: PendingQuestion,
+  locale?: DialogueLocale
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const options = pending.options ?? [];
+  if (options.includes(value)) return value;
+  if (!locale) return undefined;
+  return resolveOptionIdFromPreviousValue(locale, pending.topic, options, value);
+}
+
+function resolveScalePreviousValue(
+  value: unknown,
+  locale?: DialogueLocale
+): number | undefined {
+  if (typeof value === "number" && value >= 1 && value <= 5) return value;
+  if (typeof value === "string") {
+    const num = Number(value);
+    if (!Number.isNaN(num) && num >= 1 && num <= 5) return num;
+    if (locale) {
+      const wordScore = matchScaleWord(locale, value);
+      if (wordScore !== undefined) return wordScore;
+    }
+  }
+  return undefined;
+}
+
+function resolveMultiSelectPreviousValue(
+  value: unknown,
+  pending: PendingQuestion,
+  locale?: DialogueLocale
+): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = pending.options ?? [];
+  const resolved: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    if (options.includes(item)) {
+      resolved.push(item);
+    } else if (locale) {
+      const optionId = resolveOptionIdFromPreviousValue(locale, pending.topic, options, item);
+      if (optionId) {
+        resolved.push(optionId);
+      } else {
+        return undefined;
+      }
+    } else {
+      return undefined;
+    }
+  }
+  return resolved.length > 0 ? resolved : undefined;
+}
+
+export function resolveSameAsBeforeValue(
+  value: unknown,
+  pending: PendingQuestion,
+  localeCode?: string
+): { valid: false } | { valid: true; normalizedValue: unknown } {
+  const locale = localeCode ? getLocale(localeCode) : undefined;
+
+  if (pending.expectedResponseType === "text") {
+    if (typeof value !== "string" || value.trim().length === 0) return { valid: false };
+    return { valid: true, normalizedValue: value };
+  }
+
+  if (pending.expectedResponseType === "scale") {
+    const resolved = resolveScalePreviousValue(value, locale);
+    return resolved !== undefined ? { valid: true, normalizedValue: resolved } : { valid: false };
+  }
+
+  if (pending.expectedResponseType === "single_choice") {
+    const resolved = resolveSingleChoicePreviousValue(value, pending, locale);
+    return resolved !== undefined ? { valid: true, normalizedValue: resolved } : { valid: false };
+  }
+
+  if (pending.expectedResponseType === "multi_select") {
+    const resolved = resolveMultiSelectPreviousValue(value, pending, locale);
+    return resolved !== undefined ? { valid: true, normalizedValue: resolved } : { valid: false };
+  }
+
+  return { valid: false };
+}
+
+export async function buildSameAsBeforeMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const purpose = pending.purpose.replace(/\?$/, "").trim();
+  const text = `No problem — I'll carry over your previous answer for "${purpose}".`;
+
+  const output: PlannerOutput = {
+    reasoning: "User asked to reuse their previous answer for this question.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "inform",
+      topic: pending.topic,
+      purpose: text,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, output, options);
+}
+
+const REPEAT_PATTERNS = [
+  /^repeat$/i,
+  /^say that again$/i,
+  /^say again$/i,
+  /^repeat the question$/i,
+  /^can you repeat/i,
+  /^could you repeat/i,
+  /^please repeat/i,
+  /^rephrase$/i,
+  /^reword it$/i,
+  /^word it differently$/i,
+];
+
+export function looksLikeRepeatRequest(text: string): boolean {
+  return REPEAT_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function buildRepeatMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const repeatOutput: PlannerOutput = {
+    reasoning: "User asked to repeat the pending question.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: pending.purpose,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, repeatOutput, options);
+}
+
+const NOT_APPLICABLE_PATTERNS = [
+  /^n\/a$/i,
+  /^not applicable$/i,
+  /^doesn't apply$/i,
+  /^does not apply$/i,
+  /^not relevant$/i,
+  /^not applicable to me$/i,
+];
+
+export function looksLikeNotApplicableRequest(text: string): boolean {
+  return NOT_APPLICABLE_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export async function recordNotApplicableQuestion(
+  prisma: PrismaClient,
+  userId: string,
+  cycleId: string,
+  checkInId: string,
+  pending: PendingQuestion,
+  eventId: string,
+  now: Date,
+  traceId?: string
+): Promise<void> {
+  await prisma.observation.create({
+    data: {
+      userId,
+      cycleId,
+      eventId,
+      timestamp: now,
+      category: "subjective" as ObservationCategory,
+      concept: pending.topic,
+      value: "no_answer" as Prisma.InputJsonValue,
+      attributes: { reason: "not_applicable" } as Prisma.InputJsonValue,
+      confidence: 1,
+      extractedBy: "rule",
+    },
+  });
+
+  await clearPendingQuestion(prisma, checkInId);
+
+  await prisma.event.create({
+    data: {
+      userId,
+      cycleId,
+      checkInId,
+      type: "user_action" as const,
+      payload: {
+        action: "not_applicable_question",
+        topic: pending.topic,
+        expectedResponseType: pending.expectedResponseType,
+      } as unknown as Prisma.InputJsonValue,
+      timestamp: now,
+      traceId,
+    },
+  });
+}
+
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {
   await prisma.checkIn.update({
     where: { id: checkInId },
@@ -1065,4 +1450,223 @@ export async function setPendingQuestion(
       ] as unknown as Prisma.InputJsonValue,
     },
   });
+}
+
+export interface TopicShiftResult {
+  /** Whether the user's reply shifts away from the pending question to a different topic. */
+  isShift: boolean;
+  /** The topic the user shifted to, if detectable. */
+  shiftedToTopic?: string;
+  /** Observations extracted for the new topic. */
+  shiftedToObservations?: import("./types.js").Observation[];
+}
+
+const NON_SHIFT_INTENTS = new Set([
+  "question",
+  "help",
+  "stop",
+  "delete_data",
+  "export_data",
+  "continue_cycle",
+  "initiate",
+  "correction",
+]);
+
+/**
+ * Detect whether a reply that did not answer the pending question is actually
+ * a topic shift: the user volunteered information about a different subject
+ * instead of answering the asked question.
+ *
+ * We treat this differently from a confused or off-topic reply because the
+ * user is still trying to update their record; we should accept the new info
+ * and defer the pending question rather than reprompt indefinitely.
+ */
+export function detectTopicShift(
+  _message: InboundMessage,
+  perception: PerceptionResult,
+  pending: PendingQuestion
+): TopicShiftResult {
+  if (NON_SHIFT_INTENTS.has(perception.intent.primary)) {
+    return { isShift: false };
+  }
+
+  const shiftedToObservations = perception.extractedObservations.filter(
+    (o) => o.concept !== pending.topic
+  );
+
+  if (shiftedToObservations.length === 0) {
+    return { isShift: false };
+  }
+
+  return {
+    isShift: true,
+    shiftedToTopic: shiftedToObservations[0].concept,
+    shiftedToObservations,
+  };
+}
+
+export interface DeferredQuestion extends PendingQuestion {
+  /** ISO timestamp when the question was deferred. */
+  deferredAt: string;
+}
+
+/**
+ * Load deferred questions from the most recent check-in in the same cycle that
+ * still has an unhandled deferred list. Used when starting a new check-in so
+ * questions skipped or shifted away from in the previous session are not lost.
+ */
+export async function loadDeferredQuestionsFromPreviousCheckIn(
+  prisma: PrismaClient,
+  cycleId: string,
+  excludeCheckInId?: string
+): Promise<DeferredQuestion[]> {
+  const previous = await prisma.checkIn.findFirst({
+    where: {
+      cycleId,
+      id: excludeCheckInId ? { not: excludeCheckInId } : undefined,
+      deferredQuestions: { not: Prisma.JsonNull },
+    },
+    orderBy: { scheduledAt: "desc" },
+    select: { deferredQuestions: true },
+  });
+  return (previous?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+}
+
+/**
+ * Remove deferred questions whose topic has already been answered in a recent
+ * observation. Prevents re-asking a question the user already provided.
+ */
+export function filterAnsweredDeferredQuestions(
+  deferred: DeferredQuestion[],
+  observations: Array<{ concept: string }>
+): DeferredQuestion[] {
+  const answeredTopics = new Set(observations.map((o) => o.concept));
+  return deferred.filter((d) => !answeredTopics.has(d.topic));
+}
+
+/**
+ * Move the current pending question into the check-in's deferred list so it
+ * can be re-raised later, and clear the active pending question.
+ */
+export async function deferPendingQuestion(
+  prisma: PrismaClient,
+  checkInId: string,
+  pending: PendingQuestion
+): Promise<DeferredQuestion[]> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { deferredQuestions: true },
+  });
+  const existing = (current?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+  const deferred: DeferredQuestion = {
+    ...pending,
+    deferredAt: new Date().toISOString(),
+  };
+  const updated = [...existing, deferred];
+
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      deferredQuestions: updated as unknown as Prisma.InputJsonValue,
+      pendingQuestion: Prisma.JsonNull,
+      repromptCount: 0,
+    },
+  });
+
+  return updated;
+}
+
+/**
+ * Re-raise the oldest deferred question as a fresh pending question.
+ *
+ * This is used when the current check-in is about to end but still has
+ * questions the user skipped or shifted away from earlier in the session.
+ */
+export async function popDeferredQuestion(
+  prisma: PrismaClient,
+  checkInId: string
+): Promise<PendingQuestion | undefined> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { deferredQuestions: true },
+  });
+  const deferred = (current?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+  if (deferred.length === 0) return undefined;
+
+  const [next, ...rest] = deferred;
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      deferredQuestions: rest.length > 0 ? (rest as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      pendingQuestion: next as unknown as Prisma.InputJsonValue,
+      repromptCount: 0,
+    },
+  });
+
+  return next;
+}
+
+/**
+ * Pop the oldest deferred question that has not already been answered in the
+ * provided observations. Answered questions are dropped from the stored list.
+ *
+ * This is useful when re-raising deferred questions at the end of a session:
+ * a topic may have been answered later in the same session, so we should not
+ * ask it again.
+ */
+export async function popNextDeferredQuestion(
+  prisma: PrismaClient,
+  checkInId: string,
+  observations: Array<{ concept: string }>
+): Promise<PendingQuestion | undefined> {
+  const current = await prisma.checkIn.findUnique({
+    where: { id: checkInId },
+    select: { deferredQuestions: true },
+  });
+  const deferred = (current?.deferredQuestions as DeferredQuestion[] | undefined) ?? [];
+  const unanswered = filterAnsweredDeferredQuestions(deferred, observations);
+  if (unanswered.length === 0) {
+    if (deferred.length > 0) {
+      await prisma.checkIn.update({
+        where: { id: checkInId },
+        data: { deferredQuestions: Prisma.JsonNull },
+      });
+    }
+    return undefined;
+  }
+
+  const [next, ...rest] = unanswered;
+  await prisma.checkIn.update({
+    where: { id: checkInId },
+    data: {
+      deferredQuestions: rest.length > 0 ? (rest as unknown as Prisma.InputJsonValue) : Prisma.JsonNull,
+      pendingQuestion: next as unknown as Prisma.InputJsonValue,
+      repromptCount: 0,
+    },
+  });
+
+  return next;
+}
+
+export async function buildDeferredQuestionMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const deferredOutput: PlannerOutput = {
+    reasoning: "Re-raising a question that was deferred earlier in the session.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "ask",
+      topic: pending.topic,
+      purpose: `Before we finish, one more question: ${pending.purpose}`,
+      expectedResponseType: pending.expectedResponseType,
+      options: pending.options,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, deferredOutput, options);
 }

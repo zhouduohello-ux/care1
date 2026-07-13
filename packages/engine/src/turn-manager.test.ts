@@ -11,11 +11,18 @@ import {
   buildRepromptMessage,
   buildClarificationMessage,
   looksLikeClarificationRequest,
+  looksLikeUncertaintyRequest,
+  buildUncertaintyProbeMessage,
+  recordUncertainAnswer,
   looksLikeSkipRequest,
   recordSkippedQuestion,
+  looksLikeNotApplicableRequest,
+  recordNotApplicableQuestion,
   looksLikeGoBackRequest,
   goBackToPreviousQuestion,
   buildPreviousQuestionMessage,
+  looksLikeRepeatRequest,
+  buildRepeatMessage,
   classifyNonAnswer,
   getTurnState,
   recordReprompt,
@@ -24,15 +31,26 @@ import {
   getMaxReprompts,
   getLlmAnswerRelevanceThreshold,
   getSessionTurnBudget,
+  looksLikeSameAsBeforeRequest,
+  findPreviousObservationForTopic,
+  resolveSameAsBeforeValue,
+  buildSameAsBeforeMessage,
   DEFAULT_MAX_REPROMPTS,
   DEFAULT_SESSION_TURN_BUDGET,
+  shouldDeferOnTimeout,
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
   detectTopicShift,
-  buildTopicShiftAcknowledgementMessage,
-  recordTopicShift,
+  deferPendingQuestion,
+  popDeferredQuestion,
+  popNextDeferredQuestion,
+  buildDeferredQuestionMessage,
+  filterAnsweredDeferredQuestions,
+  loadDeferredQuestionsFromPreviousCheckIn,
+  levenshteinDistance,
 } from "./turn-manager.js";
+import { normalizeAnswerText } from "./dialogue-locales/index.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
   return {
@@ -238,6 +256,82 @@ describe("evaluateAnswerToPendingQuestion", () => {
     expect(result.confidence).toBeGreaterThanOrEqual(0.4);
     expect(result.confidence).toBeLessThanOrEqual(0.9);
     expect(result.matchMethod).toBe("partial");
+  });
+
+  it("scores fuzzy single_choice typo match at lower confidence", () => {
+    const pending = { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "limitted" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("fuzzy_synonym");
+    expect(result.confidence).toBeGreaterThanOrEqual(0.75);
+    expect(result.confidence).toBeLessThanOrEqual(0.9);
+  });
+
+  it("matches single_choice option id with a small typo", () => {
+    const pending = { topic: "nighttime_symptoms", purpose: "Night symptoms?", expectedResponseType: "single_choice" as const, options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "night_non" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("fuzzy_synonym");
+  });
+
+  it("does not fuzzy-match very short tokens to avoid false positives", () => {
+    const pending = { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "lim" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(false);
+    expect(result.matchMethod).toBe("none");
+  });
+
+  it("matches single_choice synonym after normalization of contractions", () => {
+    const pending = { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0", "reliever_1", "reliever_2", "reliever_3_plus"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "I didn't use it" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("synonym");
+  });
+
+  it("matches multi_select after normalization of punctuation and whitespace", () => {
+    const pending = { topic: "triggers", purpose: "Triggers?", expectedResponseType: "multi_select" as const, options: ["pollen", "dust", "exercise"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "  Pollen,  DUST!!  " }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("exact_option");
+  });
+});
+
+describe("levenshteinDistance", () => {
+  it("returns 0 for identical strings", () => {
+    expect(levenshteinDistance("mild", "mild")).toBe(0);
+  });
+
+  it("returns the number of single-character edits", () => {
+    expect(levenshteinDistance("mild", "mile")).toBe(1);
+    expect(levenshteinDistance("limited", "limitted")).toBe(1);
+    expect(levenshteinDistance("none", "nope")).toBe(1);
+  });
+
+  it("handles empty strings", () => {
+    expect(levenshteinDistance("", "abc")).toBe(3);
+    expect(levenshteinDistance("abc", "")).toBe(3);
+  });
+});
+
+describe("normalizeAnswerText", () => {
+  it("trims, lowercases, and collapses whitespace", () => {
+    expect(normalizeAnswerText("  Hello   World  ")).toBe("hello world");
+  });
+
+  it("expands common contractions", () => {
+    expect(normalizeAnswerText("I don't know")).toBe("i do not know");
+    expect(normalizeAnswerText("I didn't use it")).toBe("i did not use it");
+    expect(normalizeAnswerText("can't remember")).toBe("cannot remember");
+    expect(normalizeAnswerText("I'm not sure")).toBe("i am not sure");
+  });
+
+  it("strips surrounding punctuation", () => {
+    expect(normalizeAnswerText("'none!'")).toBe("none");
+    expect(normalizeAnswerText("...mild...")).toBe("mild");
+  });
+
+  it("preserves internal apostrophes in contractions", () => {
+    expect(normalizeAnswerText("it's mild")).toBe("it is mild");
   });
 });
 
@@ -687,6 +781,122 @@ describe("recordSkippedQuestion", () => {
   });
 });
 
+describe("looksLikeUncertaintyRequest", () => {
+  it("returns true for uncertainty phrases", () => {
+    expect(looksLikeUncertaintyRequest("I don't know")).toBe(true);
+    expect(looksLikeUncertaintyRequest("I do not know")).toBe(true);
+    expect(looksLikeUncertaintyRequest("not sure")).toBe(true);
+    expect(looksLikeUncertaintyRequest("no idea")).toBe(true);
+    expect(looksLikeUncertaintyRequest("can't remember")).toBe(true);
+    expect(looksLikeUncertaintyRequest("cannot recall")).toBe(true);
+    expect(looksLikeUncertaintyRequest("unsure")).toBe(true);
+    expect(looksLikeUncertaintyRequest("idk")).toBe(true);
+  });
+
+  it("returns false for normal answers", () => {
+    expect(looksLikeUncertaintyRequest("none")).toBe(false);
+    expect(looksLikeUncertaintyRequest("I woke up twice")).toBe(false);
+    expect(looksLikeUncertaintyRequest("skip")).toBe(false);
+    expect(looksLikeUncertaintyRequest("yes")).toBe(false);
+  });
+});
+
+describe("buildUncertaintyProbeMessage", () => {
+  it("renders a first-time probe with the question purpose", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often have you used your reliever inhaler in the past week?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildUncertaintyProbeMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    }, 0);
+    expect(message.content.text).toContain("if you're not sure");
+    expect(message.content.text).toContain("SKIP");
+  });
+
+  it("renders a second-time probe that offers to move on", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often have you used your reliever inhaler in the past week?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const message = await buildUncertaintyProbeMessage("user_1", pending, {
+      style: "v1",
+      locale: "en-GB",
+    }, 1);
+    expect(message.content.text).toContain("reply SKIP");
+    expect(message.content.text).toContain("come back to this another time");
+  });
+});
+
+describe("recordUncertainAnswer", () => {
+  it("creates uncertain observation, clears pending, and writes user_action event", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const observationCreate = vi.fn().mockResolvedValue(undefined);
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      observation: { create: observationCreate },
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordUncertainAnswer(
+      prisma,
+      "user_1",
+      "cycle_1",
+      "checkin_1",
+      pending,
+      "event_1",
+      new Date("2026-07-11T00:00:00Z"),
+      "trace_1"
+    );
+
+    expect(observationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          eventId: "event_1",
+          category: "subjective",
+          concept: "reliever_use",
+          value: "uncertain",
+          extractedBy: "rule",
+        }),
+      })
+    );
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "user_action",
+          traceId: "trace_1",
+        }),
+      })
+    );
+  });
+});
+
 describe("looksLikeGoBackRequest", () => {
   it("returns true for go-back phrases", () => {
     expect(looksLikeGoBackRequest("go back")).toBe(true);
@@ -800,6 +1010,12 @@ describe("extractMultiSelectAnswers", () => {
     expect(result.matched).toEqual(["pollen", "dust", "exercise"]);
     expect(result.hasMeaningfulUnmatched).toBe(false);
   });
+
+  it("fuzzy-matches tokens with typos", () => {
+    const result = extractMultiSelectAnswers("polen and excercise", pending.options, "en-GB");
+    expect(result.matched).toEqual(["pollen", "exercise"]);
+    expect(result.hasMeaningfulUnmatched).toBe(false);
+  });
 });
 
 describe("detectPartialMultiSelectAnswer", () => {
@@ -864,6 +1080,256 @@ describe("buildPartialAnswerFollowUpMessage", () => {
   });
 });
 
+describe("same-as-before handling", () => {
+  describe("looksLikeSameAsBeforeRequest", () => {
+    it.each([
+      ["same", true],
+      ["Same as before", true],
+      ["same as last time", true],
+      ["no change", true],
+      ["nothing changed", true],
+      ["as before", true],
+      ["reliever_1", false],
+      ["I'm not sure", false],
+      ["skip", false],
+    ])("detects '%s' as same-as-before: %s", (text, expected) => {
+      expect(looksLikeSameAsBeforeRequest(text)).toBe(expected);
+    });
+  });
+
+  describe("resolveSameAsBeforeValue", () => {
+    it("accepts a valid single_choice value", () => {
+      const pending = {
+        topic: "reliever_use",
+        purpose: "How often?",
+        expectedResponseType: "single_choice" as const,
+        options: ["reliever_0", "reliever_1"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue("reliever_1", pending);
+      expect(result.valid).toBe(true);
+      expect(result.valid ? result.normalizedValue : null).toBe("reliever_1");
+    });
+
+    it("rejects an invalid single_choice value", () => {
+      const pending = {
+        topic: "reliever_use",
+        purpose: "How often?",
+        expectedResponseType: "single_choice" as const,
+        options: ["reliever_0", "reliever_1"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue("reliever_99", pending);
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts and normalizes a scale value from string", () => {
+      const pending = {
+        topic: "control",
+        purpose: "Rate control",
+        expectedResponseType: "scale" as const,
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue("3", pending);
+      expect(result.valid).toBe(true);
+      expect(result.valid ? result.normalizedValue : null).toBe(3);
+    });
+
+    it("rejects out-of-range scale values", () => {
+      const pending = {
+        topic: "control",
+        purpose: "Rate control",
+        expectedResponseType: "scale" as const,
+        askedAt: "",
+      };
+      expect(resolveSameAsBeforeValue("0", pending).valid).toBe(false);
+      expect(resolveSameAsBeforeValue("6", pending).valid).toBe(false);
+    });
+
+    it("accepts a valid multi_select array", () => {
+      const pending = {
+        topic: "triggers",
+        purpose: "Triggers?",
+        expectedResponseType: "multi_select" as const,
+        options: ["pollen", "dust", "exercise"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue(["pollen", "exercise"], pending);
+      expect(result.valid).toBe(true);
+      expect(result.valid ? result.normalizedValue : null).toEqual(["pollen", "exercise"]);
+    });
+
+    it("rejects a multi_select array containing unknown options", () => {
+      const pending = {
+        topic: "triggers",
+        purpose: "Triggers?",
+        expectedResponseType: "multi_select" as const,
+        options: ["pollen", "dust", "exercise"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue(["pollen", "smoke"], pending);
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("findPreviousObservationForTopic", () => {
+    it("returns the most recent non-superseded observation value", async () => {
+      const findFirst = vi.fn().mockResolvedValue({ id: "obs_2", value: "reliever_1" });
+      const prisma = {
+        observation: { findFirst },
+      } as unknown as import("@carememory/db").PrismaClient;
+
+      const result = await findPreviousObservationForTopic(prisma, "cycle_1", "reliever_use");
+      expect(result).toEqual({ observationId: "obs_2", value: "reliever_1" });
+      expect(findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            cycleId: "cycle_1",
+            concept: "reliever_use",
+            superseded: false,
+          }),
+          orderBy: { timestamp: "desc" },
+          select: { id: true, value: true },
+        })
+      );
+    });
+
+    it("returns undefined when no previous observation exists", async () => {
+      const prisma = {
+        observation: { findFirst: vi.fn().mockResolvedValue(null) },
+      } as unknown as import("@carememory/db").PrismaClient;
+
+      const result = await findPreviousObservationForTopic(prisma, "cycle_1", "reliever_use");
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("buildSameAsBeforeMessage", () => {
+    it("renders an inform message acknowledging reuse of the previous answer", async () => {
+      const pending = {
+        topic: "reliever_use",
+        purpose: "How often did you use your reliever inhaler?",
+        expectedResponseType: "single_choice" as const,
+        options: ["reliever_0", "reliever_1"],
+        askedAt: "",
+      };
+      const message = await buildSameAsBeforeMessage("user_1", pending, { style: "v1", locale: "en-GB" });
+      expect(message.content.type).toBe("text");
+      expect(message.content.text).toContain("carry over");
+      expect(message.content.text).toContain("How often did you use your reliever inhaler");
+    });
+  });
+});
+
+describe("repeat request handling", () => {
+  it.each([
+    ["repeat", true],
+    ["Say that again", true],
+    ["say again", true],
+    ["repeat the question", true],
+    ["can you repeat that?", true],
+    ["please repeat", true],
+    ["rephrase", true],
+    ["word it differently", true],
+    ["none", false],
+    ["skip", false],
+    ["I don't understand", false],
+ ])("detects '%s' as repeat request: %s", (text, expected) => {
+    expect(looksLikeRepeatRequest(text)).toBe(expected);
+  });
+
+  it("renders the pending question again as a repeat", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1", "reliever_2", "reliever_3_plus"],
+      askedAt: "",
+    };
+    const message = await buildRepeatMessage("user_1", pending, { style: "v1", locale: "en-GB" });
+    expect(message.content.type).toBe("list");
+    expect(message.content.text).toContain("How often did you use your reliever?");
+  });
+});
+
+describe("not-applicable request handling", () => {
+  it.each([
+    ["n/a", true],
+    ["N/A", true],
+    ["not applicable", true],
+    ["doesn't apply", true],
+    ["does not apply", true],
+    ["not relevant", true],
+    ["skip", false],
+    ["same", false],
+    ["none", false],
+  ])("detects '%s' as not-applicable: %s", (text, expected) => {
+    expect(looksLikeNotApplicableRequest(text)).toBe(expected);
+  });
+
+  it("records no_answer with reason not_applicable and writes user_action event", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: new Date().toISOString(),
+    };
+    const observationCreate = vi.fn().mockResolvedValue(undefined);
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const eventCreate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      observation: { create: observationCreate },
+      checkIn: { update: checkInUpdate },
+      event: { create: eventCreate },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    await recordNotApplicableQuestion(
+      prisma,
+      "user_1",
+      "cycle_1",
+      "checkin_1",
+      pending,
+      "event_1",
+      new Date("2026-07-11T00:00:00Z"),
+      "trace_1"
+    );
+
+    expect(observationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          eventId: "event_1",
+          category: "subjective",
+          concept: "reliever_use",
+          value: "no_answer",
+          attributes: { reason: "not_applicable" },
+          extractedBy: "rule",
+        }),
+      })
+    );
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+      })
+    );
+    expect(eventCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: "user_1",
+          cycleId: "cycle_1",
+          checkInId: "checkin_1",
+          type: "user_action",
+          payload: expect.objectContaining({ action: "not_applicable_question", topic: "reliever_use" }),
+          traceId: "trace_1",
+        }),
+      })
+    );
+  });
+});
+
 describe("getSessionTurnBudget", () => {
   const originalEnv = process.env.SESSION_TURN_BUDGET;
 
@@ -895,112 +1361,245 @@ describe("getSessionTurnBudget", () => {
   });
 });
 
-describe("detectTopicShift", () => {
-  const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0", "reliever_1"], askedAt: "" };
+describe("shouldDeferOnTimeout", () => {
+  const originalEnv = process.env.PENDING_QUESTION_TIMEOUT_DEFERS;
 
-  it("returns false when the reply answers the pending question", () => {
+  afterEach(() => {
+    if (originalEnv === undefined) {
+      delete process.env.PENDING_QUESTION_TIMEOUT_DEFERS;
+    } else {
+      process.env.PENDING_QUESTION_TIMEOUT_DEFERS = originalEnv;
+    }
+  });
+
+  it("defaults to true", () => {
+    delete process.env.PENDING_QUESTION_TIMEOUT_DEFERS;
+    expect(shouldDeferOnTimeout()).toBe(true);
+  });
+
+  it("reads PENDING_QUESTION_TIMEOUT_DEFERS from environment", () => {
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "false";
+    expect(shouldDeferOnTimeout()).toBe(false);
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "0";
+    expect(shouldDeferOnTimeout()).toBe(false);
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "true";
+    expect(shouldDeferOnTimeout()).toBe(true);
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "1";
+    expect(shouldDeferOnTimeout()).toBe(true);
+  });
+
+  it("falls back to default for invalid values", () => {
+    process.env.PENDING_QUESTION_TIMEOUT_DEFERS = "maybe";
+    expect(shouldDeferOnTimeout()).toBe(true);
+  });
+});
+
+describe("detectTopicShift", () => {
+  const pending = { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0", "reliever_1"], askedAt: "" };
+
+  it("returns false when the user answers the pending topic", () => {
     const perception = makePerception({
       extractedObservations: [{ category: "medication", concept: "reliever_use", value: "reliever_1", confidence: 1, extractedBy: "rule" }],
     });
-    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "once" }), perception, pending, "en-GB");
-    const result = detectTopicShift(perception, pending, evaluation);
-    expect(result.isTopicShift).toBe(false);
-    expect(result.shiftedObservations).toEqual([]);
+    const result = detectTopicShift(makeInbound({ text: "once" }), perception, pending);
+    expect(result.isShift).toBe(false);
   });
 
-  it("returns false for non-answer intents", () => {
+  it("returns true when the user provides an observation for a different topic", () => {
     const perception = makePerception({
-      intent: { primary: "question", confidence: 1 },
-      extractedObservations: [{ category: "subjective", concept: "trigger", value: "pollen", confidence: 1, extractedBy: "rule" }],
+      extractedObservations: [{ category: "symptom", concept: "nighttime_symptoms", value: "night_mild", confidence: 1, extractedBy: "rule" }],
     });
-    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "What do you mean?" }), perception, pending);
-    const result = detectTopicShift(perception, pending, evaluation);
-    expect(result.isTopicShift).toBe(false);
+    const result = detectTopicShift(makeInbound({ text: "I had a mild cough at night" }), perception, pending);
+    expect(result.isShift).toBe(true);
+    expect(result.shiftedToTopic).toBe("nighttime_symptoms");
+    expect(result.shiftedToObservations).toHaveLength(1);
   });
 
-  it("does not treat vague uncertainty as a topic shift", () => {
+  it("returns false for system-command intents such as skip or help", () => {
     const perception = makePerception({
-      extractedObservations: [{ category: "subjective", concept: "uncertainty", value: "not sure", confidence: 1, extractedBy: "rule" }],
+      intent: { primary: "help", confidence: 1 },
+      extractedObservations: [{ category: "symptom", concept: "nighttime_symptoms", value: "night_mild", confidence: 1, extractedBy: "rule" }],
     });
-    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "not sure" }), perception, pending, "en-GB");
-    const result = detectTopicShift(perception, pending, evaluation);
-    expect(result.isTopicShift).toBe(false);
+    const result = detectTopicShift(makeInbound({ text: "help" }), perception, pending);
+    expect(result.isShift).toBe(false);
   });
 
-  it("detects a shift when the user introduces a different observation", () => {
-    const perception = makePerception({
-      extractedObservations: [{ category: "symptom", concept: "nighttime_symptoms", value: "yes", confidence: 1, extractedBy: "rule" }],
-    });
-    const evaluation = evaluateAnswerToPendingQuestion(makeInbound({ text: "I wheezed last night" }), perception, pending, "en-GB");
-    const result = detectTopicShift(perception, pending, evaluation);
-    expect(result.isTopicShift).toBe(true);
-    expect(result.shiftedObservations).toHaveLength(1);
-    expect(result.shiftedObservations[0].concept).toBe("nighttime_symptoms");
+  it("returns false when no observations are extracted", () => {
+    const perception = makePerception({ rawText: "something random" });
+    const result = detectTopicShift(makeInbound({ text: "something random" }), perception, pending);
+    expect(result.isShift).toBe(false);
   });
 });
 
-describe("buildTopicShiftAcknowledgementMessage", () => {
-  it("acknowledges the shifted concepts and moves on", async () => {
-    const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
-    const shifted = [{ category: "symptom" as const, concept: "nighttime_symptoms", value: "yes", confidence: 1, extractedBy: "rule" as const }];
-    const message = await buildTopicShiftAcknowledgementMessage("user_1", pending, shifted, { style: "v1", locale: "en-GB" });
-    expect(message.content.type).toBe("text");
-    expect(message.content.text).toContain("nighttime symptoms");
-    expect(message.content.text).toContain("move on");
-  });
-});
-
-describe("recordTopicShift", () => {
-  it("records no_answer for the pending question, clears pending, and writes a user_action event", async () => {
-    const pending = { topic: "reliever_use", purpose: "How often?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
-    const observationCreate = vi.fn().mockResolvedValue(undefined);
+describe("deferPendingQuestion", () => {
+  it("appends the pending question to deferredQuestions and clears pending", async () => {
+    const pending = { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "" };
     const checkInUpdate = vi.fn().mockResolvedValue(undefined);
-    const eventCreate = vi.fn().mockResolvedValue(undefined);
     const prisma = {
-      observation: { create: observationCreate },
-      checkIn: { update: checkInUpdate },
-      event: { create: eventCreate },
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: [] }),
+        update: checkInUpdate,
+      },
     } as unknown as import("@carememory/db").PrismaClient;
 
-    await recordTopicShift(
-      prisma,
-      "user_1",
-      "cycle_1",
-      "checkin_1",
-      pending,
-      [{ category: "symptom" as const, concept: "nighttime_symptoms", value: "yes", confidence: 1, extractedBy: "rule" as const }],
-      "event_1",
-      new Date("2026-07-11T00:00:00Z"),
-      "trace_1"
-    );
-
-    expect(observationCreate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        data: expect.objectContaining({
-          userId: "user_1",
-          cycleId: "cycle_1",
-          eventId: "event_1",
-          category: "subjective",
-          concept: "reliever_use",
-          value: "no_answer",
-          attributes: { reason: "topic_shift" },
-        }),
-      })
-    );
+    const result = await deferPendingQuestion(prisma, "checkin_1", pending);
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toBe("reliever_use");
+    expect(result[0].deferredAt).toBeDefined();
     expect(checkInUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "checkin_1" },
-        data: expect.objectContaining({ pendingQuestion: Prisma.JsonNull, repromptCount: 0 }),
+        data: expect.objectContaining({
+          pendingQuestion: Prisma.JsonNull,
+          repromptCount: 0,
+        }),
       })
     );
-    expect(eventCreate).toHaveBeenCalledWith(
+  });
+});
+
+describe("popDeferredQuestion", () => {
+  it("returns undefined when there are no deferred questions", async () => {
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: [] }),
+        update: vi.fn().mockResolvedValue(undefined),
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popDeferredQuestion(prisma, "checkin_1");
+    expect(result).toBeUndefined();
+  });
+
+  it("pops the oldest deferred question and sets it as pending", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever use?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+      { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no"], askedAt: "", deferredAt: "2026-01-01T00:00:01.000Z" },
+    ];
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popDeferredQuestion(prisma, "checkin_1");
+    expect(result?.topic).toBe("reliever_use");
+    expect(checkInUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
+        where: { id: "checkin_1" },
         data: expect.objectContaining({
-          userId: "user_1",
-          cycleId: "cycle_1",
-          checkInId: "checkin_1",
-          type: "user_action",
-          traceId: "trace_1",
+          pendingQuestion: deferred[0],
+          deferredQuestions: [deferred[1]],
+          repromptCount: 0,
+        }),
+      })
+    );
+  });
+});
+
+describe("buildDeferredQuestionMessage", () => {
+  it("renders a deferred question with a 'Before we finish' prefix", async () => {
+    const pending = {
+      topic: "reliever_use",
+      purpose: "How often did you use your reliever?",
+      expectedResponseType: "single_choice" as const,
+      options: ["reliever_0", "reliever_1"],
+      askedAt: "",
+    };
+    const message = await buildDeferredQuestionMessage("user_1", pending, { style: "v1", locale: "en-GB" });
+    expect(message.content.type).toBe("buttons");
+    expect(message.content.text).toContain("Before we finish");
+    expect(message.content.text).toContain(pending.purpose);
+  });
+});
+
+describe("filterAnsweredDeferredQuestions", () => {
+  it("removes deferred questions whose topic already has a recent observation", () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+      { topic: "activity_limitation", purpose: "Activity?", expectedResponseType: "single_choice" as const, options: ["activity_no"], askedAt: "", deferredAt: "2026-01-01T00:00:01.000Z" },
+    ];
+    const observations = [{ concept: "reliever_use" }];
+    const result = filterAnsweredDeferredQuestions(deferred, observations);
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toBe("activity_limitation");
+  });
+
+  it("returns all deferred questions when none are answered", () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const result = filterAnsweredDeferredQuestions(deferred, []);
+    expect(result).toHaveLength(1);
+  });
+});
+
+describe("loadDeferredQuestionsFromPreviousCheckIn", () => {
+  it("loads deferred questions from the most recent check-in in the cycle", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const prisma = {
+      checkIn: {
+        findFirst: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await loadDeferredQuestionsFromPreviousCheckIn(prisma, "cycle_1", "checkin_2");
+    expect(result).toHaveLength(1);
+    expect(result[0].topic).toBe("reliever_use");
+  });
+});
+
+describe("popNextDeferredQuestion", () => {
+  it("pops the oldest unanswered deferred question", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+      { topic: "activity_limitation", purpose: "Activity?", expectedResponseType: "single_choice" as const, options: ["activity_no"], askedAt: "", deferredAt: "2026-01-01T00:00:01.000Z" },
+    ];
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popNextDeferredQuestion(prisma, "checkin_1", [{ concept: "reliever_use" }]);
+    expect(result?.topic).toBe("activity_limitation");
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          pendingQuestion: deferred[1],
+          deferredQuestions: Prisma.JsonNull,
+          repromptCount: 0,
+        }),
+      })
+    );
+  });
+
+  it("returns undefined when all deferred questions are already answered", async () => {
+    const deferred = [
+      { topic: "reliever_use", purpose: "Reliever?", expectedResponseType: "single_choice" as const, options: ["reliever_0"], askedAt: "", deferredAt: "2026-01-01T00:00:00.000Z" },
+    ];
+    const checkInUpdate = vi.fn().mockResolvedValue(undefined);
+    const prisma = {
+      checkIn: {
+        findUnique: vi.fn().mockResolvedValue({ deferredQuestions: deferred }),
+        update: checkInUpdate,
+      },
+    } as unknown as import("@carememory/db").PrismaClient;
+
+    const result = await popNextDeferredQuestion(prisma, "checkin_1", [{ concept: "reliever_use" }]);
+    expect(result).toBeUndefined();
+    expect(checkInUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "checkin_1" },
+        data: expect.objectContaining({
+          deferredQuestions: Prisma.JsonNull,
         }),
       })
     );
