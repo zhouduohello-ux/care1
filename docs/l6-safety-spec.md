@@ -129,18 +129,24 @@ interface SafetyResult {
 ### 5.5 Safety metrics and alerting (P3) ✅ Done
 
 `/admin/metrics` now exposes:
+
 - `safetyChecksTotal`
 - `safetyBlocksTotal`
 - `safetyBlocks24h`
 - `safetyHighRisk24h`
 
-Future work: webhook/notification hook for blocked messages.
+Blocked-message alerting is implemented in `packages/engine/src/safety-alert.ts`:
+
+- `createSafetyWrapper()` calls `sendSafetyAlert()` whenever a batch is blocked (`approved=false`, `riskLevel=high`).
+- The alert always logs a structured warning.
+- If `SAFETY_ALERT_WEBHOOK_URL` is configured, the payload is POSTed to that URL; webhook failures are swallowed so they cannot break the user flow.
 
 ## 6. Tests
 
 | Test file | Coverage |
 |-----------|----------|
 | `packages/rag/src/safety-rules.test.ts` | Per-disease rule loading, empty fallback for unsupported diseases. |
+| `packages/engine/src/safety-alert.test.ts` | Webhook alerting: logs always, POSTs when configured, swallows failures. |
 | `packages/engine/src/safety.test.ts` | Regex blocks, RAG phrase blocks, addendum classification, neutral content, button/list scanning, `applySafetyAction` batch abort, unknown-disease fallback. |
 | `packages/engine/src/safety-llm.test.ts` | LLM approval, LLM blocking, malformed/non-JSON responses. |
 | `packages/engine/src/memory.test.ts` | `saveSafetyCheckEvent` payload and skip-on-missing-user behaviour. |
