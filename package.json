@@ -36,7 +36,8 @@
     "test:e2e:clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-clarification.json",
     "test:e2e:skip": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-skip.json",
     "test:e2e:go-back": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-go-back.json",
-    "test:e2e:multi-turn-clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-multi-turn-clarification.json"
+    "test:e2e:multi-turn-clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-multi-turn-clarification.json",
+    "test:e2e:typo-tolerance": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-typo-tolerance.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

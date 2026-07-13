@@ -111,6 +111,7 @@ export interface AnswerConfidenceResult {
   matchMethod:
     | "exact_option"
     | "synonym"
+    | "fuzzy_synonym"
     | "scale_number"
     | "scale_word"
     | "text_observation"
@@ -123,11 +124,107 @@ export interface AnswerConfidenceResult {
 }
 
 /**
+ * Compute the Levenshtein edit distance between two strings.
+ *
+ * This is used for fuzzy option matching: a patient might type "midl" when
+ * they mean "mild", or "limitted" when they mean "limited".
+ */
+export function levenshteinDistance(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+
+  // Use two rows to keep O(min(m, n)) space.
+  const previous = new Array(n + 1).fill(0);
+  const current = new Array(n + 1).fill(0);
+
+  for (let j = 0; j <= n; j++) {
+    previous[j] = j;
+  }
+
+  for (let i = 1; i <= m; i++) {
+    current[0] = i;
+    const ca = a[i - 1];
+    for (let j = 1; j <= n; j++) {
+      const cb = b[j - 1];
+      const insert = previous[j] + 1;
+      const del = current[j - 1] + 1;
+      const substitute = previous[j - 1] + (ca === cb ? 0 : 1);
+      current[j] = Math.min(insert, del, substitute);
+    }
+    for (let j = 0; j <= n; j++) {
+      previous[j] = current[j];
+    }
+  }
+
+  return previous[n];
+}
+
+/** Maximum allowed edit-distance ratio for a fuzzy option match. */
+const DEFAULT_FUZZY_MATCH_RATIO = 0.25;
+
+interface FuzzyMatchResult {
+  optionId: string;
+  confidence: number;
+}
+
+/**
+ * Try to fuzzy-match a token against option IDs, labels, and synonyms.
+ *
+ * Returns the best matching option ID if the Levenshtein distance is within
+ * the configured ratio of the candidate length. Short tokens (< 4 chars) are
+ * not fuzzy-matched to avoid false positives.
+ */
+function findFuzzyOptionMatch(
+  token: string,
+  options: string[],
+  locale?: DialogueLocale,
+  ratio = DEFAULT_FUZZY_MATCH_RATIO
+): FuzzyMatchResult | undefined {
+  if (token.length < 4) return undefined;
+
+  let best: FuzzyMatchResult | undefined;
+  let bestDistance = Infinity;
+
+  const candidates: Array<{ optionId: string; text: string }> = [];
+  for (const optionId of options) {
+    candidates.push({ optionId, text: optionId });
+    if (locale) {
+      const labels = locale.optionLabels[optionId] ?? [];
+      for (const label of labels) {
+        candidates.push({ optionId, text: label });
+      }
+      const synonyms = locale.optionSynonyms?.[optionId] ?? [];
+      for (const synonym of synonyms) {
+        candidates.push({ optionId, text: synonym });
+      }
+    }
+  }
+
+  for (const { optionId, text } of candidates) {
+    const normalized = text.toLowerCase();
+    if (normalized.length === 0) continue;
+    const distance = levenshteinDistance(token, normalized);
+    const maxAllowed = Math.max(1, Math.floor(normalized.length * ratio));
+    if (distance <= maxAllowed && distance < bestDistance) {
+      bestDistance = distance;
+      // Confidence decreases as distance grows: 0.85 at distance 0, 0.75 at max allowed.
+      const confidence = Math.max(0.75, 0.85 - distance * 0.05);
+      best = { optionId, confidence };
+    }
+  }
+
+  return best;
+}
+
+/**
  * Evaluate whether a user reply answers the pending question and score the confidence.
  *
  * Confidence scoring reflects match quality:
  * - Exact option/button/list match: 1.0
  * - Synonym or scale-word match: 0.9
+ * - Fuzzy synonym match (typo-tolerant): 0.75-0.85
  * - Scale number: 1.0
  * - Text question with a topic observation from perception: 0.8
  * - Text question without a topic observation: 0.6
@@ -199,6 +296,16 @@ export function evaluateAnswerToPendingQuestion(
       const matched = options.some((optionId) => matchOptionSynonym(locale, optionId, text));
       if (matched) {
         return { isAnswer: true, confidence: 0.9, matchMethod: "synonym", reasoning: "option synonym match" };
+      }
+      // Fuzzy / typo-tolerant matching against option IDs, labels, and synonyms.
+      const fuzzy = findFuzzyOptionMatch(text, options, locale);
+      if (fuzzy) {
+        return {
+          isAnswer: true,
+          confidence: fuzzy.confidence,
+          matchMethod: "fuzzy_synonym",
+          reasoning: `fuzzy match to option ${fuzzy.optionId}`,
+        };
       }
     }
   }
@@ -523,6 +630,15 @@ export function extractMultiSelectAnswers(
         matchedSet.add(optionId);
         tokenMatched = true;
         break;
+      }
+      // Try fuzzy matching for longer tokens (e.g. "limitted" -> "limited").
+      if (locale && token.length >= 4) {
+        const fuzzy = findFuzzyOptionMatch(token, [optionId], locale);
+        if (fuzzy) {
+          matchedSet.add(fuzzy.optionId);
+          tokenMatched = true;
+          break;
+        }
       }
     }
 

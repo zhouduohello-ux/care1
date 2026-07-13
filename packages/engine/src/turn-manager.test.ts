@@ -29,6 +29,7 @@ import {
   extractMultiSelectAnswers,
   detectPartialMultiSelectAnswer,
   buildPartialAnswerFollowUpMessage,
+  levenshteinDistance,
 } from "./turn-manager.js";
 
 function makePlannerOutput(partial: Partial<PlannerOutput["nextAction"]> & { type: PlannerOutput["nextAction"]["type"] }): PlannerOutput {
@@ -235,6 +236,46 @@ describe("evaluateAnswerToPendingQuestion", () => {
     expect(result.confidence).toBeGreaterThanOrEqual(0.4);
     expect(result.confidence).toBeLessThanOrEqual(0.9);
     expect(result.matchMethod).toBe("partial");
+  });
+
+  it("scores fuzzy single_choice typo match at lower confidence", () => {
+    const pending = { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "limitted" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("fuzzy_synonym");
+    expect(result.confidence).toBeGreaterThanOrEqual(0.75);
+    expect(result.confidence).toBeLessThanOrEqual(0.9);
+  });
+
+  it("matches single_choice option id with a small typo", () => {
+    const pending = { topic: "nighttime_symptoms", purpose: "Night symptoms?", expectedResponseType: "single_choice" as const, options: ["night_none", "night_mild", "night_disturbed", "night_woke_up"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "night_non" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(true);
+    expect(result.matchMethod).toBe("fuzzy_synonym");
+  });
+
+  it("does not fuzzy-match very short tokens to avoid false positives", () => {
+    const pending = { topic: "activity_limitation", purpose: "Limited?", expectedResponseType: "single_choice" as const, options: ["activity_no", "activity_yes"], askedAt: "" };
+    const result = evaluateAnswerToPendingQuestion(makeInbound({ text: "lim" }), makePerception(), pending, "en-GB");
+    expect(result.isAnswer).toBe(false);
+    expect(result.matchMethod).toBe("none");
+  });
+});
+
+describe("levenshteinDistance", () => {
+  it("returns 0 for identical strings", () => {
+    expect(levenshteinDistance("mild", "mild")).toBe(0);
+  });
+
+  it("returns the number of single-character edits", () => {
+    expect(levenshteinDistance("mild", "mile")).toBe(1);
+    expect(levenshteinDistance("limited", "limitted")).toBe(1);
+    expect(levenshteinDistance("none", "nope")).toBe(1);
+  });
+
+  it("handles empty strings", () => {
+    expect(levenshteinDistance("", "abc")).toBe(3);
+    expect(levenshteinDistance("abc", "")).toBe(3);
   });
 });
 
@@ -795,6 +836,12 @@ describe("extractMultiSelectAnswers", () => {
   it("handles comma and 'or' separators", () => {
     const result = extractMultiSelectAnswers("pollen, dust or exercise", pending.options, "en-GB");
     expect(result.matched).toEqual(["pollen", "dust", "exercise"]);
+    expect(result.hasMeaningfulUnmatched).toBe(false);
+  });
+
+  it("fuzzy-matches tokens with typos", () => {
+    const result = extractMultiSelectAnswers("polen and excercise", pending.options, "en-GB");
+    expect(result.matched).toEqual(["pollen", "exercise"]);
     expect(result.hasMeaningfulUnmatched).toBe(false);
   });
 });
