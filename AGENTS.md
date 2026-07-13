@@ -1,7 +1,7 @@
 # CareMemory — AI 编码代理须知
 
 > 本文件面向为本项目编写代码的 AI 代理。只保留与开发、运行、维护相关的信息。项目主要文档与注释使用中文，本文件亦使用中文撰写；代码、命令、文件路径、技术术语保持原样。
-> 最后更新：2026-07-13（同步 L6 安全配置与 `CheckIn.mediumRiskCount` 字段）。
+> 最后更新：2026-07-13（同步 L6 安全配置与 `CheckIn.mediumRiskCount` 字段，补充 L5/L6 规格文档 PR #76 内容）。
 
 ---
 
@@ -132,7 +132,7 @@ CareMemory/
 - 已将 Turn Manager 统计暴露到 admin metrics；
 - 已实现 `test:e2e:turn-manager`、`test:e2e:turn-manager-max`、`test:e2e:turn-timeline`、`test:e2e:pending-timeout` 等 E2E scenario；
 - 已补充 WhatsApp MVP 模板正式文案与 Meta 提交说明文档 `docs/whatsapp-templates.md`，并在 `AGENTS.md` 关键文档索引中注册；
-- 已为 L5 对话层补充完整规格文档 `docs/l5-dialogue-spec.md`（v1.17），记录 L4→L5 消息类型、处理矩阵、实现状态与 FOLLOW-001 至 FOLLOW-009。
+- 已为 L5 对话层补充完整规格文档 `docs/l5-dialogue-spec.md`（v1.31），记录 L4→L5 消息类型、处理矩阵、实现状态与 FOLLOW-001 至 FOLLOW-031。
 
 ---
 
