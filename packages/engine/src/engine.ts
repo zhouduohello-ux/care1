@@ -5,7 +5,7 @@ import { Prisma } from "@carememory/db";
 import type { Cycle, User, CheckIn } from "@carememory/db";
 import crypto from "node:crypto";
 import type { EngineContext, EngineTrace, LlmModelType, PlannerOutput, SafetyResult } from "./types.js";
-import { perceive } from "./perception.js";
+import { perceive, DEFAULT_BUTTON_MAP } from "./perception.js";
 import { safetyCheck, applySafetyAction, SAFETY_FALLBACK_TEXT, loadSafetyRulesForDisease } from "./safety.js";
 import { llmSafetyCheckAsync } from "./safety-llm.js";
 import { sendSafetyAlert, type SafetyAlertPayload } from "./safety-alert.js";
@@ -294,6 +294,11 @@ export function isInsufficientExceptionAnswer(
   message: InboundMessage,
   answerEvaluation: AnswerConfidenceResult
 ): boolean {
+  // Structured replies (buttons, lists) are unambiguous and should never be treated
+  // as insufficient exception answers.
+  if (message.content.type === "button_reply" || message.content.type === "list_reply") {
+    return false;
+  }
   const text = (message.content.text ?? "").trim().toLowerCase();
   if (text.length < 5) return true;
   const vaguePatterns = [
@@ -1512,6 +1517,39 @@ async function processInboundInternal(
           } as unknown as Prisma.InputJsonValue,
         },
       });
+
+      // When Turn Manager matched a text reply to a single-choice/scale option via
+      // synonym or fuzzy matching, perception only captured a generic free-text
+      // observation. Record the resolved option observation so the Disease Card and
+      // L4 Planner can see the answer.
+      if (
+        answerEvaluation.value !== undefined &&
+        !perception.extractedObservations.some((o) => o.concept === pending.topic)
+      ) {
+        const buttonObservation = DEFAULT_BUTTON_MAP[String(answerEvaluation.value)];
+        await saveObservations(
+          prisma,
+          user.id,
+          cycle.id,
+          inboundEventId,
+          [
+            buttonObservation
+              ? {
+                  ...buttonObservation,
+                  confidence: answerEvaluation.confidence,
+                  extractedBy: "rule",
+                }
+              : {
+                  category: "subjective" as const,
+                  concept: pending.topic,
+                  value: answerEvaluation.value,
+                  confidence: answerEvaluation.confidence,
+                  extractedBy: "rule",
+                },
+          ],
+          context.now
+        );
+      }
 
       // Multi-turn exception mode: if the answer is vague or insufficient, reprompt
       // the same exception question before moving to the next one. This keeps the

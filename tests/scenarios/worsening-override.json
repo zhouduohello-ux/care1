@@ -1,7 +1,7 @@
 {
   "id": "worsening_with_override",
   "name": "Worsening symptoms recorded and check-in ends",
-  "description": "Reports night symptoms, high reliever use and post-exercise wheezing. The current rule-based planner does not yet implement exception-mode override, so the scenario verifies the check-in completes and a Disease Card is generated.",
+  "description": "Reports night symptoms, high reliever use and post-exercise wheezing. After exception mode clarifications, the deferred activity limitation question is re-raised; answering it ends the check-in and generates a Disease Card.",
   "user": {
     "phoneNumber": "test_worsening_override"
   },
@@ -14,7 +14,8 @@
     { "action": "send", "text": "I wheezed badly after running today" },
     { "action": "send", "text": "It started about 20 minutes after I started running" },
     { "action": "send", "text": "Yes, my chest felt tight and I was short of breath" },
-    { "action": "send", "text": "I used my reliever inhaler and it eased after a few minutes" }
+    { "action": "send", "text": "I used my reliever inhaler and it eased after a few minutes" },
+    { "action": "reply", "buttonId": "activity_no" }
   ],
   "expectations": [
     {
@@ -26,15 +27,15 @@
       "description": "Severe symptom report triggers exception mode clarifying question"
     },
     {
-      "afterStep": 9,
+      "afterStep": 10,
       "type": "planner",
       "path": "nextAction.type",
       "op": "eq",
       "value": "end_session",
-      "description": "Check-in ends after exception mode clarifications"
+      "description": "Check-in ends after answering the re-raised deferred question"
     },
     {
-      "afterStep": 9,
+      "afterStep": 10,
       "type": "diseaseCard",
       "op": "exists",
       "description": "A Disease Card is generated after the check-in"

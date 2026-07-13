@@ -9,9 +9,9 @@
     { "action": "reset" },
     { "action": "load_persona", "personaId": "controlled_asthma" },
     { "action": "advance", "to": "next_checkin" },
-    { "action": "send", "text": "not sure" },
-    { "action": "send", "text": "not sure" },
-    { "action": "send", "text": "not sure" }
+    { "action": "send", "text": "the weather is nice" },
+    { "action": "send", "text": "the weather is nice" },
+    { "action": "send", "text": "the weather is nice" }
   ],
   "expectations": [
     {

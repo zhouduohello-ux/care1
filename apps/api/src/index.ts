@@ -54,7 +54,15 @@ const app = fastify({
 
 async function main() {
   await app.register(helmet);
-  await app.register(rateLimit, { max: 100, timeWindow: "1 minute" });
+  await app.register(rateLimit, {
+    max: 100,
+    timeWindow: "1 minute",
+    allowList: (request) => {
+      // The local test-tool is only available in development/staging and is hit
+      // heavily by E2E scenario runners; exclude it from rate limiting.
+      return request.url.startsWith("/dev/test-tool") || request.url.startsWith("/health");
+    },
+  });
 
   app.addHook("onSend", async (request, reply, payload) => {
     if (process.env.ENABLE_TEST_TOOL === "true" && request.url.startsWith("/dev/test-tool")) {
