@@ -27,6 +27,10 @@ import {
   getMaxReprompts,
   getLlmAnswerRelevanceThreshold,
   getSessionTurnBudget,
+  looksLikeSameAsBeforeRequest,
+  findPreviousObservationForTopic,
+  resolveSameAsBeforeValue,
+  buildSameAsBeforeMessage,
   DEFAULT_MAX_REPROMPTS,
   DEFAULT_SESSION_TURN_BUDGET,
   shouldDeferOnTimeout,
@@ -1069,6 +1073,147 @@ describe("buildPartialAnswerFollowUpMessage", () => {
     });
     expect(message.content.type).toBe("text");
     expect(message.content.text).toContain("anything else");
+  });
+});
+
+describe("same-as-before handling", () => {
+  describe("looksLikeSameAsBeforeRequest", () => {
+    it.each([
+      ["same", true],
+      ["Same as before", true],
+      ["same as last time", true],
+      ["no change", true],
+      ["nothing changed", true],
+      ["as before", true],
+      ["reliever_1", false],
+      ["I'm not sure", false],
+      ["skip", false],
+    ])("detects '%s' as same-as-before: %s", (text, expected) => {
+      expect(looksLikeSameAsBeforeRequest(text)).toBe(expected);
+    });
+  });
+
+  describe("resolveSameAsBeforeValue", () => {
+    it("accepts a valid single_choice value", () => {
+      const pending = {
+        topic: "reliever_use",
+        purpose: "How often?",
+        expectedResponseType: "single_choice" as const,
+        options: ["reliever_0", "reliever_1"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue("reliever_1", pending);
+      expect(result.valid).toBe(true);
+      expect(result.valid ? result.normalizedValue : null).toBe("reliever_1");
+    });
+
+    it("rejects an invalid single_choice value", () => {
+      const pending = {
+        topic: "reliever_use",
+        purpose: "How often?",
+        expectedResponseType: "single_choice" as const,
+        options: ["reliever_0", "reliever_1"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue("reliever_99", pending);
+      expect(result.valid).toBe(false);
+    });
+
+    it("accepts and normalizes a scale value from string", () => {
+      const pending = {
+        topic: "control",
+        purpose: "Rate control",
+        expectedResponseType: "scale" as const,
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue("3", pending);
+      expect(result.valid).toBe(true);
+      expect(result.valid ? result.normalizedValue : null).toBe(3);
+    });
+
+    it("rejects out-of-range scale values", () => {
+      const pending = {
+        topic: "control",
+        purpose: "Rate control",
+        expectedResponseType: "scale" as const,
+        askedAt: "",
+      };
+      expect(resolveSameAsBeforeValue("0", pending).valid).toBe(false);
+      expect(resolveSameAsBeforeValue("6", pending).valid).toBe(false);
+    });
+
+    it("accepts a valid multi_select array", () => {
+      const pending = {
+        topic: "triggers",
+        purpose: "Triggers?",
+        expectedResponseType: "multi_select" as const,
+        options: ["pollen", "dust", "exercise"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue(["pollen", "exercise"], pending);
+      expect(result.valid).toBe(true);
+      expect(result.valid ? result.normalizedValue : null).toEqual(["pollen", "exercise"]);
+    });
+
+    it("rejects a multi_select array containing unknown options", () => {
+      const pending = {
+        topic: "triggers",
+        purpose: "Triggers?",
+        expectedResponseType: "multi_select" as const,
+        options: ["pollen", "dust", "exercise"],
+        askedAt: "",
+      };
+      const result = resolveSameAsBeforeValue(["pollen", "smoke"], pending);
+      expect(result.valid).toBe(false);
+    });
+  });
+
+  describe("findPreviousObservationForTopic", () => {
+    it("returns the most recent non-superseded observation value", async () => {
+      const findFirst = vi.fn().mockResolvedValue({ id: "obs_2", value: "reliever_1" });
+      const prisma = {
+        observation: { findFirst },
+      } as unknown as import("@carememory/db").PrismaClient;
+
+      const result = await findPreviousObservationForTopic(prisma, "cycle_1", "reliever_use");
+      expect(result).toEqual({ observationId: "obs_2", value: "reliever_1" });
+      expect(findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            cycleId: "cycle_1",
+            concept: "reliever_use",
+            superseded: false,
+          }),
+          orderBy: { timestamp: "desc" },
+          select: { id: true, value: true },
+        })
+      );
+    });
+
+    it("returns undefined when no previous observation exists", async () => {
+      const prisma = {
+        observation: { findFirst: vi.fn().mockResolvedValue(null) },
+      } as unknown as import("@carememory/db").PrismaClient;
+
+      const result = await findPreviousObservationForTopic(prisma, "cycle_1", "reliever_use");
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe("buildSameAsBeforeMessage", () => {
+    it("renders an inform message acknowledging reuse of the previous answer", async () => {
+      const pending = {
+        topic: "reliever_use",
+        purpose: "How often did you use your reliever inhaler?",
+        expectedResponseType: "single_choice" as const,
+        options: ["reliever_0", "reliever_1"],
+        askedAt: "",
+      };
+      const message = await buildSameAsBeforeMessage("user_1", pending, { style: "v1", locale: "en-GB" });
+      expect(message.content.type).toBe("text");
+      expect(message.content.text).toContain("carry over");
+      expect(message.content.text).toContain("How often did you use your reliever inhaler");
+    });
   });
 });
 

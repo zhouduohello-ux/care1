@@ -1265,6 +1265,177 @@ export async function buildPreviousQuestionMessage(
   return renderMessage(userId, previousOutput, options);
 }
 
+const SAME_AS_BEFORE_PATTERNS = [
+  /^same$/i,
+  /^same as before$/i,
+  /^same as last time$/i,
+  /^same as usual$/i,
+  /^no change$/i,
+  /^nothing changed$/i,
+  /^nothing new$/i,
+  /^as before$/i,
+];
+
+export function looksLikeSameAsBeforeRequest(text: string): boolean {
+  return SAME_AS_BEFORE_PATTERNS.some((pattern) => pattern.test(text.trim()));
+}
+
+export interface PreviousObservationValue {
+  value: unknown;
+  observationId: string;
+}
+
+export async function findPreviousObservationForTopic(
+  prisma: PrismaClient,
+  cycleId: string,
+  topic: string
+): Promise<PreviousObservationValue | undefined> {
+  const observation = await prisma.observation.findFirst({
+    where: {
+      cycleId,
+      concept: topic,
+      superseded: false,
+    },
+    orderBy: { timestamp: "desc" },
+    select: { id: true, value: true },
+  });
+  if (!observation) return undefined;
+  return { value: observation.value, observationId: observation.id };
+}
+
+function normalizeTextValue(text: string): string {
+  return text.toLowerCase().replace(/[^a-z0-9\s+]/g, "").trim();
+}
+
+function resolveOptionIdFromPreviousValue(
+  locale: DialogueLocale,
+  topic: string,
+  options: string[],
+  value: string
+): string | undefined {
+  const normalizedValue = normalizeTextValue(value);
+
+  for (let idx = 0; idx < options.length; idx++) {
+    const optionId = options[idx];
+    if (normalizeTextValue(optionId) === normalizedValue) return optionId;
+    if (matchOptionSynonym(locale, optionId, value)) return optionId;
+
+    const labels = locale.optionLabels[topic];
+    const label = labels?.[idx];
+    if (label && normalizeTextValue(label) === normalizedValue) return optionId;
+  }
+
+  return undefined;
+}
+
+function resolveSingleChoicePreviousValue(
+  value: unknown,
+  pending: PendingQuestion,
+  locale?: DialogueLocale
+): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const options = pending.options ?? [];
+  if (options.includes(value)) return value;
+  if (!locale) return undefined;
+  return resolveOptionIdFromPreviousValue(locale, pending.topic, options, value);
+}
+
+function resolveScalePreviousValue(
+  value: unknown,
+  locale?: DialogueLocale
+): number | undefined {
+  if (typeof value === "number" && value >= 1 && value <= 5) return value;
+  if (typeof value === "string") {
+    const num = Number(value);
+    if (!Number.isNaN(num) && num >= 1 && num <= 5) return num;
+    if (locale) {
+      const wordScore = matchScaleWord(locale, value);
+      if (wordScore !== undefined) return wordScore;
+    }
+  }
+  return undefined;
+}
+
+function resolveMultiSelectPreviousValue(
+  value: unknown,
+  pending: PendingQuestion,
+  locale?: DialogueLocale
+): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const options = pending.options ?? [];
+  const resolved: string[] = [];
+  for (const item of value) {
+    if (typeof item !== "string") return undefined;
+    if (options.includes(item)) {
+      resolved.push(item);
+    } else if (locale) {
+      const optionId = resolveOptionIdFromPreviousValue(locale, pending.topic, options, item);
+      if (optionId) {
+        resolved.push(optionId);
+      } else {
+        return undefined;
+      }
+    } else {
+      return undefined;
+    }
+  }
+  return resolved.length > 0 ? resolved : undefined;
+}
+
+export function resolveSameAsBeforeValue(
+  value: unknown,
+  pending: PendingQuestion,
+  localeCode?: string
+): { valid: false } | { valid: true; normalizedValue: unknown } {
+  const locale = localeCode ? getLocale(localeCode) : undefined;
+
+  if (pending.expectedResponseType === "text") {
+    if (typeof value !== "string" || value.trim().length === 0) return { valid: false };
+    return { valid: true, normalizedValue: value };
+  }
+
+  if (pending.expectedResponseType === "scale") {
+    const resolved = resolveScalePreviousValue(value, locale);
+    return resolved !== undefined ? { valid: true, normalizedValue: resolved } : { valid: false };
+  }
+
+  if (pending.expectedResponseType === "single_choice") {
+    const resolved = resolveSingleChoicePreviousValue(value, pending, locale);
+    return resolved !== undefined ? { valid: true, normalizedValue: resolved } : { valid: false };
+  }
+
+  if (pending.expectedResponseType === "multi_select") {
+    const resolved = resolveMultiSelectPreviousValue(value, pending, locale);
+    return resolved !== undefined ? { valid: true, normalizedValue: resolved } : { valid: false };
+  }
+
+  return { valid: false };
+}
+
+export async function buildSameAsBeforeMessage(
+  userId: string,
+  pending: PendingQuestion,
+  options: RenderOptions
+): Promise<OutboundMessage> {
+  const purpose = pending.purpose.replace(/\?$/, "").trim();
+  const text = `No problem — I'll carry over your previous answer for "${purpose}".`;
+
+  const output: PlannerOutput = {
+    reasoning: "User asked to reuse their previous answer for this question.",
+    sessionObjective: pending.purpose,
+    nextAction: {
+      type: "inform",
+      topic: pending.topic,
+      purpose: text,
+      budgetCost: 0,
+    },
+    safetyFlag: "none",
+    updatePatientState: {},
+  };
+
+  return renderMessage(userId, output, options);
+}
+
 export async function clearPendingQuestion(prisma: PrismaClient, checkInId: string): Promise<void> {
   await prisma.checkIn.update({
     where: { id: checkInId },

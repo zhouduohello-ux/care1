@@ -1,0 +1,43 @@
+{
+  "id": "same_as_before",
+  "name": "L5 same-as-before answer reuse",
+  "description": "When a user replies 'same' to a question that was already answered earlier in the cycle, the system reuses the previous observation value instead of treating it as a non-answer.",
+  "user": {
+    "phoneNumber": "test_same_as_before"
+  },
+  "script": [
+    { "action": "reset" },
+    { "action": "load_persona", "personaId": "controlled_asthma" },
+    { "action": "advance", "to": "next_checkin" },
+    { "action": "reply", "buttonId": "night_none" },
+    { "action": "send", "text": "go back" },
+    { "action": "send", "text": "same" }
+  ],
+  "expectations": [
+    {
+      "afterStep": 5,
+      "type": "message",
+      "op": "contains",
+      "value": "Going back",
+      "description": "Go-back request re-asks the previous question"
+    },
+    {
+      "afterStep": 6,
+      "type": "message",
+      "op": "contains",
+      "value": "carry over",
+      "caseInsensitive": true,
+      "description": "Same-as-before reply triggers confirmation"
+    },
+    {
+      "afterStep": 6,
+      "type": "observation",
+      "op": "exists",
+      "filter": {
+        "concept": "nighttime_symptoms",
+        "value": "night_none"
+      },
+      "description": "Previous answer (night_none) is reused for nighttime_symptoms"
+    }
+  ]
+}
