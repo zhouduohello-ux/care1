@@ -1,4 +1,5 @@
 import { CORPUS_DOCUMENTS } from "./corpus.js";
+export { loadSafetyRules, type SafetyRuleSet } from "./safety-rules.js";
 
 export interface CorpusSection {
   id: string;

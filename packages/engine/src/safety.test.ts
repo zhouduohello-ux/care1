@@ -39,6 +39,13 @@ describe("safetyCheck", () => {
     expect(result.requiredAddendums.some((a) => a.includes("not medical advice"))).toBe(true);
   });
 
+  it("blocks RAG-loaded prohibited phrases", () => {
+    const result = safetyCheck(makeMessage("You do not need to see a doctor."));
+    expect(result.approved).toBe(false);
+    expect(result.riskLevel).toBe("high");
+    expect(result.blockReason).toMatch(/Prohibited/);
+  });
+
   it("approves neutral content without addendums", () => {
     const result = safetyCheck(makeMessage("Thank you for your reply."));
     expect(result.approved).toBe(true);
