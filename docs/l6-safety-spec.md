@@ -117,13 +117,14 @@ interface SafetyResult {
 
 `safetyCheck` now scans `buttons` titles, `list` row titles/descriptions, and `templateVariables` in addition to the main body text. Addendum classification also considers these fields.
 
-### 5.4 Per-disease safety rules verification (P2)
+### 5.4 Per-disease safety rules verification (P2) ✅ Done
 
-**Gap**: Only asthma rules exist and are tested.
+`packages/rag/src/safety-rules.test.ts` verifies:
 
-**Plan**:
-- Add disease-specific safety test suites.
-- Verify `loadSafetyRules` returns empty/fallback for unsupported diseases.
+- `loadSafetyRules("asthma")` returns non-empty rules.
+- `loadSafetyRules("unknown-disease")` returns empty rules (case-insensitive).
+
+`packages/engine/src/safety.test.ts` verifies that for an unknown disease the checker still applies fallback emergency + medical disclaimers and still blocks hard-coded prohibited patterns.
 
 ### 5.5 Safety metrics and alerting (P3) ✅ Done
 
@@ -139,7 +140,8 @@ Future work: webhook/notification hook for blocked messages.
 
 | Test file | Coverage |
 |-----------|----------|
-| `packages/engine/src/safety.test.ts` | Regex blocks, RAG phrase blocks, addendum classification, neutral content, button/list scanning, `applySafetyAction` batch abort. |
+| `packages/rag/src/safety-rules.test.ts` | Per-disease rule loading, empty fallback for unsupported diseases. |
+| `packages/engine/src/safety.test.ts` | Regex blocks, RAG phrase blocks, addendum classification, neutral content, button/list scanning, `applySafetyAction` batch abort, unknown-disease fallback. |
 | `packages/engine/src/safety-llm.test.ts` | LLM approval, LLM blocking, malformed/non-JSON responses. |
 | `packages/engine/src/memory.test.ts` | `saveSafetyCheckEvent` payload and skip-on-missing-user behaviour. |
 | `packages/engine/src/engine.integration.test.ts` | End-to-end flow including safety wrap + audit persistence. |
