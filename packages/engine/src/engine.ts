@@ -6,7 +6,7 @@ import type { Cycle, User, CheckIn } from "@carememory/db";
 import crypto from "node:crypto";
 import type { EngineContext, EngineTrace, LlmModelType, PlannerOutput, SafetyResult } from "./types.js";
 import { perceive } from "./perception.js";
-import { safetyCheck } from "./safety.js";
+import { safetyCheck, applySafetyAction } from "./safety.js";
 import { plan } from "./planner.js";
 import { renderMessage } from "./dialogue.js";
 import { combineAdjacentTextMessages } from "./message-batching.js";
@@ -348,7 +348,8 @@ function createSafetyWrapper(
   dbUserId?: string
 ) {
   return async (messages: OutboundMessage[], traceId?: string, checkInId?: string) => {
-    const wrapped = safetyWrapWithSummary(userId, messages, disease);
+    let wrapped = safetyWrapWithSummary(userId, messages, disease);
+    wrapped = applySafetyAction(wrapped.messages, wrapped.summary);
     if (dbUserId) {
       await saveSafetyCheckEvent(context.prisma, dbUserId, wrapped.summary, messages, traceId, cycleId, checkInId);
     }

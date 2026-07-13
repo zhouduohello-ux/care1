@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { safetyCheck } from "./safety.js";
+import { safetyCheck, applySafetyAction } from "./safety.js";
 import type { OutboundMessage } from "@carememory/im-core";
 
 function makeMessage(text: string, extra?: Partial<OutboundMessage["content"]>): OutboundMessage {
@@ -51,8 +51,6 @@ describe("safetyCheck", () => {
     expect(result.approved).toBe(true);
     expect(result.requiredAddendums).toHaveLength(0);
   });
-});
-
 
   it("blocks prohibited phrases inside button titles", () => {
     const result = safetyCheck(
@@ -92,3 +90,30 @@ describe("safetyCheck", () => {
     expect(result.approved).toBe(true);
     expect(result.requiredAddendums.some((a) => a.includes("999"))).toBe(true);
   });
+});
+
+describe("applySafetyAction", () => {
+  it("aborts the batch when approved is true but risk level is high", () => {
+    const messages = [makeMessage("Some paraphrased unsafe advice.")];
+    const summary = { approved: true, riskLevel: "high" as const, requiredAddendums: [] };
+
+    const result = applySafetyAction(messages, summary);
+
+    expect(result.messages).toHaveLength(1);
+    expect(result.messages[0].content.text).toBe(
+      "I'm not able to answer that in a safe way. Please speak to your healthcare team if you need advice."
+    );
+    expect(result.summary.approved).toBe(false);
+    expect(result.summary.blockReason).toMatch(/Outbound risk level high/);
+  });
+
+  it("passes through approved low-risk messages unchanged", () => {
+    const messages = [makeMessage("How often did you use your inhaler?")];
+    const summary = { approved: true, riskLevel: "low" as const, requiredAddendums: ["Disclaimer"] };
+
+    const result = applySafetyAction(messages, summary);
+
+    expect(result.messages).toEqual(messages);
+    expect(result.summary).toEqual(summary);
+  });
+});
