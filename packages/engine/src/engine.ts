@@ -38,7 +38,10 @@ import {
   MAX_REPROMPTS,
   deferPendingQuestion,
   popDeferredQuestion,
+  popNextDeferredQuestion,
   buildDeferredQuestionMessage,
+  loadDeferredQuestionsFromPreviousCheckIn,
+  filterAnsweredDeferredQuestions,
   type PendingQuestion,
   type AnswerConfidenceResult,
 } from "./turn-manager.js";
@@ -1315,11 +1318,21 @@ export async function processInbound(
   }
 
   // L4 Planner
+  // Re-fetch the active check-in so that any Turn Manager mutations
+  // (deferred questions, reprompt count, exception mode) are visible.
+  if (activeCheckIn) {
+    activeCheckIn = await prisma.checkIn.findUnique({
+      where: { id: activeCheckIn.id },
+    });
+  }
   const latestNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
     orderBy: { generatedAt: "desc" },
   });
   const recentObservations = await getRecentObservations(prisma, user.id, cycle.id, activeCheckIn?.sentAt ?? undefined);
+  const deferredTopics = (
+    (activeCheckIn?.deferredQuestions as unknown as Array<{ topic: string }> | undefined) ?? []
+  ).map((d) => d.topic);
   const plannerInput = {
     patientContext: {
       disease: cycle.disease,
@@ -1340,6 +1353,7 @@ export async function processInbound(
       inExceptionMode: activeCheckIn?.inExceptionMode ?? false,
       exceptionQuestionsAsked: activeCheckIn?.exceptionQuestionsAsked ?? 0,
       conversationStyle: getBucket(userId, "conversation_style").variant,
+      deferredTopics,
     },
     temporalContext: {
       localTime: context.now.toISOString(),
@@ -1379,9 +1393,9 @@ export async function processInbound(
   if (
     activeCheckIn &&
     plannerOutput.nextAction.type === "end_session" &&
-    (turnsRemaining === undefined || turnsRemaining > 0)
+    (turnsRemaining === undefined || turnsRemaining > 1)
   ) {
-    const deferredQuestion = await popDeferredQuestion(prisma, activeCheckIn.id);
+    const deferredQuestion = await popNextDeferredQuestion(prisma, activeCheckIn.id, recentObservations);
     if (deferredQuestion) {
       await prisma.event.create({
         data: {
@@ -1576,6 +1590,23 @@ export async function handleCheckInTrigger(
 
   const recentObservations = await getRecentObservations(prisma, cycle.userId, cycle.id, checkIn.scheduledAt ?? undefined);
 
+  // Carry forward deferred questions from the previous check-in in this cycle,
+  // filtering out any topics that have already been answered since they were deferred.
+  const inheritedDeferred = filterAnsweredDeferredQuestions(
+    await loadDeferredQuestionsFromPreviousCheckIn(prisma, cycle.id, checkIn.id),
+    recentObservations
+  );
+  if (inheritedDeferred.length > 0) {
+    await prisma.checkIn.update({
+      where: { id: checkIn.id },
+      data: {
+        deferredQuestions: inheritedDeferred as unknown as Prisma.InputJsonValue,
+      },
+    });
+  }
+
+  const deferredTopics = inheritedDeferred.map((d) => d.topic);
+
   const cycleNarrative = await prisma.narrativeSummary.findFirst({
     where: { cycleId: cycle.id },
     orderBy: { generatedAt: "desc" },
@@ -1600,6 +1631,7 @@ export async function handleCheckInTrigger(
       inExceptionMode: false,
       exceptionQuestionsAsked: 0,
       conversationStyle: getBucket(cycle.user.phoneNumber, "conversation_style").variant,
+      deferredTopics,
     },
     temporalContext: {
       localTime: context.now.toISOString(),
@@ -1610,9 +1642,47 @@ export async function handleCheckInTrigger(
   const plannerOutput = await plan(plannerInput, resolveLlmClient(context, "planner"), auditLlmCall, allowLlm);
   await savePlannerEvent(prisma, cycle.userId, cycle.id, plannerOutput);
 
+  // If we inherited deferred questions from a previous check-in, ask the oldest
+  // one first at the start of this new session before falling back to the
+  // planner's normal next question.
+  let effectivePlannerOutput = plannerOutput;
+  if (inheritedDeferred.length > 0) {
+    const nextDeferred = await popDeferredQuestion(prisma, checkIn.id);
+    if (nextDeferred) {
+      await prisma.event.create({
+        data: {
+          userId: cycle.userId,
+          cycleId: cycle.id,
+          checkInId: checkIn.id,
+          type: "user_action" as const,
+          payload: {
+            action: "deferred_question_inherited",
+            topic: nextDeferred.topic,
+            expectedResponseType: nextDeferred.expectedResponseType,
+          } as unknown as Prisma.InputJsonValue,
+          timestamp: context.now,
+        },
+      });
+      effectivePlannerOutput = {
+        reasoning: "Re-raising a deferred question from a previous check-in at the start of the new session.",
+        sessionObjective: nextDeferred.purpose,
+        nextAction: {
+          type: "ask",
+          topic: nextDeferred.topic,
+          purpose: `Before we move on: ${nextDeferred.purpose}`,
+          expectedResponseType: nextDeferred.expectedResponseType,
+          options: nextDeferred.options,
+          budgetCost: 0,
+        },
+        safetyFlag: "none",
+        updatePatientState: {},
+      };
+    }
+  }
+
   let outbound: OutboundMessage;
   try {
-    outbound = await renderMessage(cycle.user.phoneNumber, plannerOutput, {
+    outbound = await renderMessage(cycle.user.phoneNumber, effectivePlannerOutput, {
       style: (plannerInput.conversationContext.conversationStyle as "v1" | "v2") ?? "v1",
       locale: cycle.user.locale,
       cycleContext: {
@@ -1631,7 +1701,7 @@ export async function handleCheckInTrigger(
     console.error("L5 render failed in handleCheckInTrigger, falling back to safe message", {
       userId: cycle.user.phoneNumber,
       cycleId: cycle.id,
-      nextAction: plannerOutput.nextAction,
+      nextAction: effectivePlannerOutput.nextAction,
       error: err instanceof Error ? err.message : String(err),
     });
     outbound = {
@@ -1655,7 +1725,7 @@ export async function handleCheckInTrigger(
     checkIn.id
   );
 
-  const pending = pendingQuestionFromPlannerOutput(plannerOutput);
+  const pending = pendingQuestionFromPlannerOutput(effectivePlannerOutput);
   if (pending) {
     await setPendingQuestion(prisma, checkIn.id, pending);
   }
@@ -1680,7 +1750,7 @@ export async function handleCheckInTrigger(
     where: { id: checkIn.id },
     data: {
       questionsAsked: { increment: 1 },
-      budgetRemaining: { decrement: plannerOutput.nextAction.budgetCost },
+      budgetRemaining: { decrement: effectivePlannerOutput.nextAction.budgetCost },
     },
   });
 

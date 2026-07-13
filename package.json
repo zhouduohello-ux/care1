@@ -38,6 +38,9 @@
     "test:e2e:go-back": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-go-back.json",
     "test:e2e:topic-shift": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-topic-shift.json",
     "test:e2e:multi-turn-clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-multi-turn-clarification.json"
+    "test:e2e:multi-turn-clarification": "tsx tests/scenarios/run-scenario.ts tests/scenarios/turn-manager-multi-turn-clarification.json",
+    "test:e2e:topic-shift": "tsx tests/scenarios/run-scenario.ts tests/scenarios/topic-shift-deferred-follow-up.json",
+    "test:e2e:deferred-cross-checkin": "tsx tests/scenarios/run-scenario.ts tests/scenarios/deferred-question-cross-checkin.json"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
