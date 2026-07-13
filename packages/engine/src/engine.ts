@@ -36,7 +36,6 @@ import {
   buildTopicShiftAcknowledgementMessage,
   recordTopicShift,
   MAX_REPROMPTS,
-  detectTopicShift,
   deferPendingQuestion,
   popDeferredQuestion,
   buildDeferredQuestionMessage,
