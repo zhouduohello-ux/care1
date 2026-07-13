@@ -139,6 +139,9 @@ export class ScenarioRunner {
       }
       return response;
     } catch (err) {
+      if (err instanceof Error && err.name === "AbortError") {
+        throw new Error(`Request timeout after ${this.requestTimeoutMs}ms for ${route}`);
+      }
       if (retryCount < this.requestRetries) {
         const delay = Math.min(1000 * 2 ** retryCount, 8000);
         if (this.verbose) {

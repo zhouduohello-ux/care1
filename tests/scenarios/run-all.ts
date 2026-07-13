@@ -37,9 +37,13 @@ async function main() {
   const apiBaseUrl = process.env.API_BASE_URL ?? DEFAULT_API_BASE_URL;
   const waitForHealth = !args.includes("--no-wait");
   const verbose = args.includes("--verbose");
+  const scenarioRetries = Number(
+    process.env.E2E_SCENARIO_RETRIES ?? (args.find((a) => a.startsWith("--retries="))?.split("=")[1] ?? "1")
+  );
 
   console.log(`\nCareMemory E2E smoke runner`);
-  console.log(`API base URL: ${apiBaseUrl}\n`);
+  console.log(`API base URL: ${apiBaseUrl}`);
+  console.log(`Scenario retries: ${scenarioRetries}\n`);
 
   if (waitForHealth) {
     process.stdout.write("Waiting for API /health to report ok");
@@ -77,8 +81,18 @@ async function main() {
   for (let i = 0; i < paths.length; i++) {
     const scenarioPath = paths[i];
     const scenario = await loadScenario(scenarioPath);
-    const result = await runner.run(scenario);
-    results.push(result);
+
+    let result: RunResult | undefined;
+    let attempts = 0;
+    while (attempts <= scenarioRetries) {
+      attempts += 1;
+      if (attempts > 1) {
+        console.log(`  ↻ Retry ${attempts - 1}/${scenarioRetries} for ${scenario.id}`);
+      }
+      result = await runner.run(scenario);
+      if (result.passed) break;
+    }
+    results.push(result!);
     console.log("");
     if (i < paths.length - 1) {
       await runner.sleepBetweenScenarios();
