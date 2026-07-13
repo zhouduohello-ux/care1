@@ -165,6 +165,13 @@ export class ScenarioRunner {
     });
   }
 
+  async resetAllTestUsers() {
+    return this.api("/dev/test-tool/api/reset-all-test-users", {
+      method: "POST",
+      body: JSON.stringify({}),
+    }) as Promise<{ reset: boolean; deleted: number }>;
+  }
+
   private loadPersona(userId: string, personaId: string) {
     return this.api("/dev/test-tool/api/load-persona", {
       method: "POST",
