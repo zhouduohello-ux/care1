@@ -112,7 +112,7 @@ interface SafetyResult {
 `safety-llm.ts` provides `llmSafetyCheckAsync()`. It is invoked by `createSafetyWrapper()` when `allowLlm` is true and a safety-layer LLM client is available. The prompt includes disease context and RAG safety rules; output is JSON `{approved, riskLevel, blockReason}`. LLM failures and malformed responses fall back to the rule-based result (fail-open on error, fail-closed on non-JSON).
 
 **Future tuning**:
-- A/B test classifier vs. rule-only to measure block rate and false-positive rate.
+- ✅ A/B test classifier vs. rule-only to measure block rate and false-positive rate. Implemented as `safety_classifier` experiment with `llm` / `rule_only` variants in `packages/engine/src/experiments.ts`. The variant is recorded in every `safety_check` audit event.
 - ✅ Cache classifier results per message text to reduce LLM cost. Implemented in `packages/engine/src/safety-llm.ts` with an in-memory TTL cache keyed by message texts + disease + RAG rules. Configurable via `SAFETY_LLM_CACHE_TTL_MS` and `SAFETY_LLM_CACHE_MAX_ENTRIES`.
 - ✅ Robust JSON extraction. `parseLlmSafetyResponse()` now extracts the first top-level JSON object, tolerating markdown fences and surrounding explanatory text, before falling back to a safe block.
 

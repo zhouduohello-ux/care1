@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 
-export type ExperimentName = "checkin_frequency" | "conversation_style";
+export type ExperimentName = "checkin_frequency" | "conversation_style" | "safety_classifier";
 
 export interface ExperimentConfig {
   defaultVariant: string;
@@ -18,6 +18,11 @@ const EXPERIMENTS: Record<ExperimentName, ExperimentConfig> = {
     defaultVariant: "v1",
     variants: ["v1", "v2"],
     split: [80, 100],
+  },
+  safety_classifier: {
+    defaultVariant: "llm",
+    variants: ["llm", "rule_only"],
+    split: [50, 100],
   },
 };
 
@@ -73,4 +78,14 @@ export function scheduleNextCheckInOffset(userId: string, baseNow: Date): Date {
   const next = new Date(baseNow.getTime() + hours * 60 * 60 * 1000);
   next.setHours(10, 0, 0, 0);
   return next;
+}
+
+/** Returns the A/B bucket variant for the safety classifier experiment. */
+export function getSafetyClassifierVariant(userId: string): string {
+  return getBucket(userId, "safety_classifier").variant;
+}
+
+/** Returns true if the user is in the LLM classifier bucket (default). */
+export function isLlmSafetyClassifierEnabled(userId: string): boolean {
+  return getSafetyClassifierVariant(userId) !== "rule_only";
 }

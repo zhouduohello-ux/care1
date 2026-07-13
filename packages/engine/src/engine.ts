@@ -59,7 +59,7 @@ import {
   type AnswerConfidenceResult,
 } from "./turn-manager.js";
 import { hasLlmQuota, incrementLlmQuota } from "./llm-quota.js";
-import { scheduleNextCheckInOffset, getBucket } from "./experiments.js";
+import { scheduleNextCheckInOffset, getBucket, getSafetyClassifierVariant } from "./experiments.js";
 import {
   saveInboundMessage,
   saveOutboundMessages,
@@ -356,7 +356,8 @@ function createSafetyWrapper(
     wrapped = applySafetyAction(wrapped.messages, wrapped.summary);
 
     // Optional LLM semantic classifier for paraphrased unsafe advice.
-    if (wrapped.summary.approved && allowLlm) {
+    // A/B test: users in the "rule_only" bucket skip the LLM classifier entirely.
+    if (wrapped.summary.approved && allowLlm && getSafetyClassifierVariant(userId) !== "rule_only") {
       const llmClient = resolveLlmClient(context, "safety");
       if (llmClient) {
         try {
@@ -389,6 +390,8 @@ function createSafetyWrapper(
       mediumRiskCount = updated.mediumRiskCount;
     }
 
+    const safetyClassifierExperiment = getSafetyClassifierVariant(userId);
+
     if (dbUserId) {
       await saveSafetyCheckEvent(
         context.prisma,
@@ -398,7 +401,8 @@ function createSafetyWrapper(
         traceId,
         cycleId,
         checkInId,
-        mediumRiskCount
+        mediumRiskCount,
+        safetyClassifierExperiment
       );
     }
 

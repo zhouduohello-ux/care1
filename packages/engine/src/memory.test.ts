@@ -86,14 +86,16 @@ describe("saveSafetyCheckEvent", () => {
     expect((data.payload as Record<string, unknown>).checkedTexts).toEqual([messages[0].content.text]);
   });
 
-  it("includes optional mediumRiskCount in payload", async () => {
+  it("includes optional mediumRiskCount and safetyClassifierExperiment in payload", async () => {
     const prisma = makePrismaStub();
     const summary: SafetyResult = { approved: true, riskLevel: "medium", requiredAddendums: [] };
 
-    await saveSafetyCheckEvent(prisma, "user_1", summary, [makeMessage("Hello")], undefined, undefined, "checkin_1", 2);
+    await saveSafetyCheckEvent(prisma, "user_1", summary, [makeMessage("Hello")], undefined, undefined, "checkin_1", 2, "rule_only");
 
     expect(prisma.event.create).toHaveBeenCalledTimes(1);
-    expect((prisma.created[0].payload as Record<string, unknown>).mediumRiskCount).toBe(2);
+    const payload = prisma.created[0].payload as Record<string, unknown>;
+    expect(payload.mediumRiskCount).toBe(2);
+    expect(payload.safetyClassifierExperiment).toBe("rule_only");
   });
 
   it("skips persistence when dbUserId is missing", async () => {

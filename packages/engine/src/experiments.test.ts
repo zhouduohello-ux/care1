@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { getBucket, scheduleNextCheckInOffset } from "./experiments.js";
+import { getBucket, scheduleNextCheckInOffset, getSafetyClassifierVariant, isLlmSafetyClassifierEnabled } from "./experiments.js";
 
 describe("experiments", () => {
   const originalEnv = process.env;
@@ -42,5 +42,23 @@ describe("experiments", () => {
     expect(next.getHours()).toBe(10);
     expect(next.getMinutes()).toBe(0);
     expect(next.getTime()).toBeGreaterThan(now.getTime());
+  });
+
+  it("returns a safety classifier variant", () => {
+    process.env.EXPERIMENT_SAFETY_CLASSIFIER_ENABLED = "true";
+    const variant = getSafetyClassifierVariant("user_123");
+    expect(["llm", "rule_only"]).toContain(variant);
+  });
+
+  it("disables LLM safety classifier for rule_only bucket", () => {
+    process.env.EXPERIMENT_SAFETY_CLASSIFIER_ENABLED = "true";
+    process.env.EXPERIMENT_SAFETY_CLASSIFIER_SPLIT = "0,100";
+    expect(isLlmSafetyClassifierEnabled("user_any")).toBe(false);
+  });
+
+  it("enables LLM safety classifier for llm bucket", () => {
+    process.env.EXPERIMENT_SAFETY_CLASSIFIER_ENABLED = "true";
+    process.env.EXPERIMENT_SAFETY_CLASSIFIER_SPLIT = "100,0";
+    expect(isLlmSafetyClassifierEnabled("user_any")).toBe(true);
   });
 });
