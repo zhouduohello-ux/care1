@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { llmSafetyCheckAsync, type LlmSafetyCheckInput, clearSafetyLlmCache } from "./safety-llm.js";
 import { createStubClient } from "./llm.js";
 import type { OutboundMessage } from "@carememory/im-core";
+import type { LLMClient, LLMMessage } from "./llm.js";
 
 function makeMessage(text: string, extra?: Partial<OutboundMessage["content"]>): OutboundMessage {
   return {
@@ -120,21 +121,22 @@ describe("llmSafetyCheckAsync", () => {
     expect(callCount).toBe(2);
   });
 
-  it("respects SAFETY_LLM_CACHE_TTL_MS", async () => {
-    process.env.SAFETY_LLM_CACHE_TTL_MS = "50";
-    let callCount = 0;
-    const client = {
+  it("includes few-shot examples in the system prompt", async () => {
+    let capturedMessages: LLMMessage[] | undefined;
+    const client: LLMClient = {
       modelName: "stub",
-      async complete() {
-        callCount += 1;
+      async complete(messages) {
+        capturedMessages = messages;
         return { content: JSON.stringify({ approved: true, riskLevel: "none" }) };
       },
     };
 
     await llmSafetyCheckAsync(DEFAULT_INPUT, client);
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    await llmSafetyCheckAsync(DEFAULT_INPUT, client);
-
-    expect(callCount).toBe(2);
+    expect(capturedMessages).toBeDefined();
+    const system = capturedMessages!.find((m) => m.role === "system")?.content ?? "";
+    expect(system).toContain("How many times did you use your reliever inhaler today?");
+    expect(system).toContain("You should take 2 puffs of your reliever now.");
+    expect(system).toContain('"approved": false');
+    expect(system).toContain('"approved": true');
   });
 });

@@ -2,12 +2,20 @@ import type { OutboundMessage } from "@carememory/im-core";
 import type { SafetyResult } from "./types.js";
 import { loadSafetyRules } from "@carememory/rag";
 
-const PROHIBITED_PATTERNS = [
-  /you (have|are having) (an asthma attack|a severe attack|an attack)/i,
-  /you should (increase|decrease|stop|start|change) (your medication|your inhaler|the dose)/i,
-  /take \d+ puffs? (of|from) your/i,
-  /you need (steroids|antibiotics|a nebulizer)/i,
-  /your asthma is (severe|uncontrolled|life-threatening)/i,
+interface PatternRule {
+  pattern: RegExp;
+  except?: RegExp;
+}
+
+const PROHIBITED_RULES: PatternRule[] = [
+  { pattern: /you (have|are having) (an asthma attack|a severe attack|an attack)/i },
+  { pattern: /you should (increase|decrease|stop|start|change) (your medication|your inhaler|the dose)/i },
+  {
+    pattern: /take \d+ puffs? (of|from) your/i,
+    except: /\b(how many|did you|do you|have you)\b.*\btake \d+ puffs?\b/i,
+  },
+  { pattern: /you need (steroids|antibiotics|a nebulizer)/i },
+  { pattern: /your asthma is (severe|uncontrolled|life-threatening)/i },
 ];
 
 const FALLBACK_EMERGENCY_ADDENDUM =
@@ -58,14 +66,17 @@ function collectTextsToCheck(message: OutboundMessage): string[] {
 
 function checkTextAgainstPatterns(
   text: string,
-  patterns: RegExp[]
+  rules: PatternRule[]
 ): Pick<SafetyResult, "approved" | "riskLevel" | "blockReason"> {
-  for (const pattern of patterns) {
-    if (pattern.test(text)) {
+  for (const rule of rules) {
+    if (rule.pattern.test(text)) {
+      if (rule.except && rule.except.test(text)) {
+        continue;
+      }
       return {
         approved: false,
         riskLevel: "high",
-        blockReason: `Prohibited diagnostic or treatment language detected: ${pattern.source}`,
+        blockReason: `Prohibited diagnostic or treatment language detected: ${rule.pattern.source}`,
       };
     }
   }
@@ -101,14 +112,14 @@ function buildRequiredAddendums(texts: string[], disease?: string): string[] {
   return addendums;
 }
 
-function buildProhibitedPatterns(disease?: string): RegExp[] {
-  const patterns = [...PROHIBITED_PATTERNS];
-  const rules = disease ? loadSafetyRules(disease) : null;
-  for (const phrase of rules?.prohibitedPhrases ?? []) {
+function buildProhibitedPatterns(disease?: string): PatternRule[] {
+  const rules: PatternRule[] = [...PROHIBITED_RULES];
+  const ragRules = disease ? loadSafetyRules(disease) : null;
+  for (const phrase of ragRules?.prohibitedPhrases ?? []) {
     if (!phrase.trim()) continue;
-    patterns.push(phraseToPattern(phrase));
+    rules.push({ pattern: phraseToPattern(phrase) });
   }
-  return patterns;
+  return rules;
 }
 
 export function safetyCheck(message: OutboundMessage, disease = "asthma"): SafetyResult {
@@ -119,9 +130,9 @@ export function safetyCheck(message: OutboundMessage, disease = "asthma"): Safet
     riskLevel: "none",
   };
 
-  const prohibitedPatterns = buildProhibitedPatterns(disease);
+  const prohibitedRules = buildProhibitedPatterns(disease);
   for (const text of texts) {
-    const check = checkTextAgainstPatterns(text, prohibitedPatterns);
+    const check = checkTextAgainstPatterns(text, prohibitedRules);
     if (!check.approved) {
       result.approved = false;
       result.riskLevel = check.riskLevel;

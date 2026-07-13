@@ -1,7 +1,7 @@
 # CareMemory — AI 编码代理须知
 
 > 本文件面向为本项目编写代码的 AI 代理。只保留与开发、运行、维护相关的信息。项目主要文档与注释使用中文，本文件亦使用中文撰写；代码、命令、文件路径、技术术语保持原样。
-> 最后更新：2026-07-13（同步 L6 安全配置与 `CheckIn.mediumRiskCount` 字段，补充 L5/L6 规格文档 PR #76 内容）。
+> 最后更新：2026-07-13（同步 L6 安全配置与 `CheckIn.mediumRiskCount` 字段，补充 L5/L6 规格文档 PR #76 内容，优化 L6 Safety 层误拦截规则与 LLM classifier few-shot 示例）。
 
 ---
 

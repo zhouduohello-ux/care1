@@ -27,6 +27,12 @@ describe("safetyCheck", () => {
     expect(result.approved).toBe(false);
   });
 
+  it("allows dosing questions that happen to contain dosing words", () => {
+    const result = safetyCheck(makeMessage("How many puffs did you take of your reliever?"));
+    expect(result.approved).toBe(true);
+    expect(result.riskLevel).toBe("none");
+  });
+
   it("requires emergency disclaimer for asthma content", () => {
     const result = safetyCheck(makeMessage("How often did you use your inhaler?"));
     expect(result.approved).toBe(true);
