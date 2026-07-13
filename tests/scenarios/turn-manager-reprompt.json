@@ -1,7 +1,7 @@
 {
   "id": "turn_manager_reprompt",
   "name": "Turn Manager reprompts on off-topic reply",
-  "description": "When the user replies to a check-in question with an off-topic answer, the Turn Manager reprompts with the pending question before moving on.",
+  "description": "When the user replies to a check-in question with an off-topic answer that does not match a known Turn Manager shortcut, the Turn Manager reprompts with the pending question before moving on.",
   "user": {
     "phoneNumber": "test_turn_manager"
   },
@@ -9,14 +9,15 @@
     { "action": "reset" },
     { "action": "load_persona", "personaId": "controlled_asthma" },
     { "action": "advance", "to": "next_checkin" },
-    { "action": "send", "text": "not sure" }
+    { "action": "send", "text": "the weather is nice" }
   ],
   "expectations": [
     {
       "afterStep": 4,
       "type": "message",
       "op": "contains",
-      "value": "I didn't catch that",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
       "description": "Turn Manager reprompts the pending question after an off-topic reply"
     },
     {

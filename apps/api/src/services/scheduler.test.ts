@@ -3,7 +3,6 @@ import type { PrismaClient } from "@carememory/db";
 import type { Job } from "bullmq";
 import type { Redis } from "ioredis";
 import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs, getPendingTimeoutMs, getScanLookbackMs, getSchedulerIntervalMs } from "./scheduler.js";
-import { createProcessor, startScheduler, SCHEDULER_QUEUE_NAME, getNudgeAfterMs, getPendingTimeoutMs } from "./scheduler.js";
 import { deferPendingQuestion } from "@carememory/engine";
 
 vi.mock("@carememory/engine", () => ({

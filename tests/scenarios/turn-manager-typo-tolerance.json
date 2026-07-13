@@ -1,7 +1,7 @@
 {
   "id": "turn_manager_typo_tolerance",
   "name": "Turn Manager tolerates small typos in text replies",
-  "description": "When a user replies to a single-choice check-in question with a small typo (e.g. 'midl' instead of 'mild'), the Turn Manager fuzzy-matches it to the intended option and continues the check-in without reprompting.",
+  "description": "When a user replies to a single-choice check-in question with a small typo (e.g. 'night_non' instead of 'night_none'), the Turn Manager fuzzy-matches it to the intended option and continues the check-in without reprompting.",
   "user": {
     "phoneNumber": "test_turn_typo"
   },
@@ -9,7 +9,7 @@
     { "action": "reset" },
     { "action": "load_persona", "personaId": "controlled_asthma" },
     { "action": "advance", "to": "next_checkin" },
-    { "action": "send", "text": "midl" },
+    { "action": "send", "text": "night_non" },
     { "action": "reply", "buttonId": "reliever_0" },
     { "action": "reply", "buttonId": "activity_no" }
   ],

@@ -1,7 +1,7 @@
 {
   "id": "turn_manager_topic_shift",
   "name": "Turn Manager handles topic shift",
-  "description": "When the user does not answer the pending question but introduces a new relevant observation, the system acknowledges the shift, records the pending question as no_answer, and continues to the next question.",
+  "description": "When the user does not answer the pending question but introduces a new relevant observation, the system accepts the new observation, defers the pending question, and continues to the next question.",
   "user": {
     "phoneNumber": "test_turn_topic_shift"
   },
@@ -9,30 +9,38 @@
     { "action": "reset" },
     { "action": "load_persona", "personaId": "controlled_asthma" },
     { "action": "advance", "to": "next_checkin" },
-    { "action": "send", "text": "I don't remember, but I used my reliever three times" }
+    { "action": "send", "text": "I have a cough today" }
   ],
   "expectations": [
     {
       "afterStep": 4,
       "type": "observation",
       "op": "exists",
-      "filter": { "concept": "reliever_use" },
-      "description": "System records the shifted reliever-use observation"
+      "filter": { "category": "symptom" },
+      "description": "System records a shifted symptom observation"
     },
     {
       "afterStep": 4,
       "type": "observation",
-      "op": "exists",
-      "filter": { "concept": "nighttime_symptoms", "value": "no_answer" },
-      "description": "System records a topic-shift no_answer for the pending question"
+      "op": "not_exists",
+      "filter": { "concept": "reliever_use", "value": "no_answer" },
+      "description": "System does not record a no_answer for the pending question; it is deferred"
+    },
+    {
+      "afterStep": 4,
+      "type": "message",
+      "op": "not_contains",
+      "value": "didn't catch that",
+      "caseInsensitive": true,
+      "description": "Topic shift is not treated as a failed reprompt"
     },
     {
       "afterStep": 4,
       "type": "message",
       "op": "contains",
-      "value": "Noted",
+      "value": "reliever",
       "caseInsensitive": true,
-      "description": "System acknowledges the topic shift"
+      "description": "System moves on to the next uncovered question after accepting the shifted topic"
     }
   ]
 }

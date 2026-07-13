@@ -18,8 +18,9 @@
       "afterStep": 5,
       "type": "message",
       "op": "contains",
-      "value": "Going back",
-      "description": "Go-back request re-asks the previous question"
+      "value": "night",
+      "caseInsensitive": true,
+      "description": "Go-back re-asks the nighttime symptoms question"
     },
     {
       "afterStep": 6,

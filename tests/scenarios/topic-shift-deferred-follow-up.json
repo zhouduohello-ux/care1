@@ -43,7 +43,7 @@
       "afterStep": 5,
       "type": "message",
       "op": "contains",
-      "value": "exercise",
+      "value": "activities",
       "caseInsensitive": true,
       "description": "System asks activity limitation after reliever"
     },
