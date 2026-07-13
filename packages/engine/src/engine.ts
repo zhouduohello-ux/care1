@@ -305,11 +305,12 @@ export function isInsufficientExceptionAnswer(
 
 function safetyWrapWithSummary(
   userId: string,
-  messages: OutboundMessage[]
+  messages: OutboundMessage[],
+  disease?: string
 ): { messages: OutboundMessage[]; summary: SafetyResult } {
   const results: SafetyResult[] = [];
   const wrapped = messages.map((msg) => {
-    const check = safetyCheck(msg);
+    const check = safetyCheck(msg, disease);
     results.push(check);
     if (!check.approved) {
       return {
